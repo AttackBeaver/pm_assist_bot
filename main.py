@@ -1,23 +1,28 @@
 import asyncio
 import logging
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+from aiogram import Bot, Dispatcher
 from config import BOT_TOKEN
 
-# Включаем логирование, чтобы видеть ошибки
+# Импорт роутеров
+from bot.handlers import user_commands, message_handler, voice_handler, callbacks
+from bot.tasks.scheduler import reminder_worker, evening_digest_worker
+
 logging.basicConfig(level=logging.INFO)
 
-# Создаём объекты бота и диспетчера
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Обработчик команды /start
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    await message.answer("Привет! Я PM‑Assist_bot. Работаю в фоне и помогаю с задачами.")
+# Подключаем роутеры
+dp.include_router(user_commands.router)
+dp.include_router(message_handler.router)
+dp.include_router(voice_handler.router)
+dp.include_router(callbacks.router)
 
-# Запуск бота
 async def main():
+    # Запускаем фоновые задачи
+    asyncio.create_task(reminder_worker(bot))
+    asyncio.create_task(evening_digest_worker(bot))
+    # Запускаем polling
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
