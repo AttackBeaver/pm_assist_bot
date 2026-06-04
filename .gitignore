@@ -1,0 +1,50 @@
+# Виртуальное окружение
+venv/
+env/
+ENV/
+.venv/
+
+# Файлы IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Файлы Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Конфиденциальные данные
+.env
+*.log
+
+# Базы данных (SQLite)
+*.db
+*.sqlite
+*.sqlite3
+
+# Аудио и временные файлы
+*.mp3
+*.wav
+*.ogg
+*.mp4
+*.aac
+*.wma
+test_audio.*
+
+# Результаты распознавания (если сохраняем локально)
+calls_text/
+*.txt
+
+# Файлы очередей (если будут)
+files_queue.db
+
+# OS метаданные
+.DS_Store
+Thumbs.db
