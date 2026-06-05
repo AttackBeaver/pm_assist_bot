@@ -1,13 +1,28 @@
 import logging
+import uuid
+from typing import Optional
+
 from aiogram import Router
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder   # <-- ДОБАВИТЬ
+
 from yougile_client import YouGileClient
-from config import YOUGILE_TOKEN
-from web.database import complete_task, get_task_by_id, delete_task
+from config import YOUGILE_TOKEN, WEB_BASE_URL, YOUGILE_DO_COLUMN_ID, YOUGILE_DONE_COLUMN_ID
+from web.database import get_task_by_id, delete_task, complete_task
 
 logger = logging.getLogger(__name__)
 router = Router()
 
+
+def _cabinet_button(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
+    if "localhost" in WEB_BASE_URL or "127.0.0.1" in WEB_BASE_URL:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🌐 Открыть личный кабинет", url=f"{WEB_BASE_URL}/cabinet/{telegram_id}")
+    ]])
+
+
+# ---------- Обработчик отмены задачи ----------
 @router.callback_query(lambda c: c.data.startswith("cancel_task_"))
 async def cancel_task_callback(callback: CallbackQuery):
     task_uuid = callback.data.removeprefix("cancel_task_")
@@ -16,7 +31,6 @@ async def cancel_task_callback(callback: CallbackQuery):
         await callback.answer("Задача уже удалена или не найдена", show_alert=True)
         await callback.message.delete()
         return
-
     yougile_card_id = task.get("yougile_card_id")
     if yougile_card_id and YOUGILE_TOKEN:
         client = YouGileClient(YOUGILE_TOKEN)
@@ -25,7 +39,6 @@ async def cancel_task_callback(callback: CallbackQuery):
             delete_task(task_uuid)
             await callback.message.edit_text("❌ Задача удалена из YouGile и из вашего списка.")
         else:
-            # Если YouGile не удалилось, всё равно удаляем локально
             delete_task(task_uuid)
             await callback.message.edit_text("⚠️ Не удалось удалить задачу в YouGile, но она удалена из локального списка.")
     else:
@@ -33,53 +46,70 @@ async def cancel_task_callback(callback: CallbackQuery):
         await callback.message.edit_text("❌ Задача удалена из локального списка (карточка в YouGile не найдена).")
     await callback.answer()
 
-# Добавить в конец файла callbacks.py
+
+# ---------- Управление задачами (из списка) ----------
+@router.callback_query(lambda c: c.data.startswith("manage_task_"))
+async def manage_task_callback(callback: CallbackQuery):
+    task_id = callback.data.removeprefix("manage_task_")
+    task = get_task_by_id(task_id)
+    if not task:
+        await callback.answer("Задача не найдена", show_alert=True)
+        await callback.message.delete()
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_id}")
+    builder.button(text="✅ Завершить", callback_data=f"complete_task_{task_id}")
+    builder.button(text="❌ Удалить", callback_data=f"cancel_task_{task_id}")
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        f"📋 **{task['title']}**\n"
+        f"📅 Дедлайн: {task['deadline'] or 'не указан'}\n"
+        f"🟢 Статус: {task['status']}\n\n"
+        f"Выберите действие:",
+        parse_mode="Markdown",
+        reply_markup=builder.as_markup()
+    )
+    await callback.answer()
+
 
 @router.callback_query(lambda c: c.data.startswith("move_to_do_"))
-async def move_to_in_progress(callback: CallbackQuery):
-    task_uuid = callback.data.removeprefix("move_to_do_")
-    task = get_task_by_id(task_uuid)
+async def move_to_do_callback(callback: CallbackQuery):
+    task_id = callback.data.removeprefix("move_to_do_")
+    task = get_task_by_id(task_id)
     if not task:
         await callback.answer("Задача не найдена", show_alert=True)
         return
     yougile_card_id = task.get("yougile_card_id")
-    if yougile_card_id and YOUGILE_TOKEN:
-        from config import YOUGILE_DO_COLUMN_ID
+    if yougile_card_id and YOUGILE_TOKEN and YOUGILE_DO_COLUMN_ID:
         client = YouGileClient(YOUGILE_TOKEN)
-        if YOUGILE_DO_COLUMN_ID:
-            success = client.move_task(yougile_card_id, YOUGILE_DO_COLUMN_ID)
-            if success:
-                await callback.message.edit_text("🟡 Задача перемещена в колонку «В процессе».")
-            else:
-                await callback.message.edit_text("⚠️ Не удалось переместить задачу.")
+        success = client.move_task(yougile_card_id, YOUGILE_DO_COLUMN_ID)
+        if success:
+            await callback.answer("Задача перемещена в колонку «В процессе»")
+            await callback.message.edit_text("✅ Задача перемещена в работу!")
         else:
-            await callback.message.edit_text("⚠️ Не указан ID колонки «В процессе» в .env")
+            await callback.answer("Ошибка перемещения", show_alert=True)
     else:
-        await callback.message.edit_text("⚠️ Нет связи с YouGile.")
-    await callback.answer()
+        await callback.answer("Не удалось переместить задачу", show_alert=True)
 
 
 @router.callback_query(lambda c: c.data.startswith("complete_task_"))
 async def complete_task_callback(callback: CallbackQuery):
-    task_uuid = callback.data.removeprefix("complete_task_")
-    task = get_task_by_id(task_uuid)
+    task_id = callback.data.removeprefix("complete_task_")
+    task = get_task_by_id(task_id)
     if not task:
         await callback.answer("Задача не найдена", show_alert=True)
         return
     yougile_card_id = task.get("yougile_card_id")
-    if yougile_card_id and YOUGILE_TOKEN:
-        from config import YOUGILE_DONE_COLUMN_ID
+    if yougile_card_id and YOUGILE_TOKEN and YOUGILE_DONE_COLUMN_ID:
         client = YouGileClient(YOUGILE_TOKEN)
-        if YOUGILE_DONE_COLUMN_ID:
-            success = client.move_task(yougile_card_id, YOUGILE_DONE_COLUMN_ID)
-            if success:
-                complete_task(task_uuid)  # локальное обновление
-                await callback.message.edit_text("✅ Задача завершена и перемещена в «Готово».")
-            else:
-                await callback.message.edit_text("⚠️ Не удалось завершить задачу.")
+        success = client.move_task(yougile_card_id, YOUGILE_DONE_COLUMN_ID)
+        if success:
+            complete_task(task_id)
+            await callback.answer("Задача завершена!")
+            await callback.message.edit_text("✅ Задача выполнена и перемещена в «Готово»")
         else:
-            await callback.message.edit_text("⚠️ Не указан ID колонки «Готово» в .env")
+            await callback.answer("Ошибка завершения", show_alert=True)
     else:
-        complete_task(task_uuid)  # хотя бы локально
-        await callback.message.edit_text("✅ Задача отмечена выполненной локально (YouGile не настроен).")
-    await callback.answer()
+        await callback.answer("Не удалось завершить задачу", show_alert=True)

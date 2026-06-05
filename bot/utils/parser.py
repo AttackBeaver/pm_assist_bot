@@ -110,28 +110,13 @@ _TASK_KEYWORDS = frozenset([
     "воскресенье"
 ])
 
-def parse_task(text: str, known_usernames: list[str]) -> dict:
+def parse_task(text: str, known_usernames: list[str]) -> dict[str, Optional[str | int]]:
     text_lower = text.lower()
+    # 1. Ответственный – только @упоминания
     assignee = None
-
-    # 1) Поиск @username
     at_mentions = re.findall(r'@([a-zA-Z0-9_]+)', text)
     if at_mentions:
-        assignee = at_mentions[0]
-    else:
-        # 2) Поиск имени с заглавной буквы в начале строки (до запятой, точки или пробела)
-        # Пример: "Антон, сделай отчёт" -> "Антон"
-        match = re.match(r'^([А-ЯA-Z][а-яa-z]+(?:[-\s][А-ЯA-Z][а-яa-z]+)?)\s*[,.:]?\s+', text)
-        if match:
-            potential_name = match.group(1)
-            # Дополнительно проверим, что имя не слишком короткое и не похоже на команду
-            if len(potential_name) >= 2 and not potential_name.lower() in ['я', 'ты', 'он', 'она', 'оно']:
-                assignee = potential_name
-        else:
-            # 3) Поиск email (как вариант, но вряд ли это ответственный)
-            email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
-            if email_match:
-                assignee = email_match.group(0)  # сохраняем email как строку
+        assignee = at_mentions[0]  # берём первого упомянутого
     # 2. Дедлайн
     deadline = date_utils.parse_deadline(text)
     # 3. Текст задачи
@@ -160,13 +145,10 @@ def _calculate_confidence(task: str, deadline: Optional[str], assignee: Optional
     has_assignee = assignee is not None
     has_keyword = any(re.search(rf'\b{kw}\b', text_lower) for kw in _TASK_KEYWORDS)
 
-    # Если нет ключевых слов и нет дедлайна и нет ответственного – уверенность 0
     if not has_keyword and not has_deadline and not has_assignee:
         return 0
-    # Если сообщение очень короткое (3 слова или меньше) и нет дедлайна/ответственного – 0
     if len(text_lower.split()) <= 3 and not has_deadline and not has_assignee:
         return 0
-    # Если есть ключевое слово, но задача не выделена
     if has_keyword and not has_task:
         return 30
     if has_task and has_deadline and has_assignee:

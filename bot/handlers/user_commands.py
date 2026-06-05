@@ -11,6 +11,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
+from aiogram.utils.keyboard import InlineKeyboardBuilder   # <-- ДОБАВИТЬ
 
 from config import WEB_BASE_URL
 from web.database import (
@@ -52,7 +53,6 @@ def _main_keyboard() -> ReplyKeyboardMarkup:
 
 
 def _cabinet_inline(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
-    """Inline-кнопка перехода в личный кабинет (только для публичного URL)."""
     url = f"{WEB_BASE_URL}/cabinet/{telegram_id}"
     if "localhost" in WEB_BASE_URL or "127.0.0.1" in WEB_BASE_URL:
         return None
@@ -105,23 +105,22 @@ async def cmd_help(message: Message) -> None:
 @router.message(F.text == "📋 Мои задачи")
 async def cmd_tasks(message: Message) -> None:
     tasks = get_tasks_by_user(message.from_user.id, status="pending")
-    cabinet_url = f"{WEB_BASE_URL}/cabinet/{message.from_user.id}"
-    inline = _cabinet_inline(message.from_user.id)
-
     if not tasks:
-        await message.answer(
-            f"✨ У вас нет активных задач.\n\n"
-            f"🌐 Кабинет: {cabinet_url}",
-            reply_markup=inline,
-        )
+        await message.answer("✨ У вас нет активных задач.")
         return
 
-    lines = ["📋 Ваши активные задачи:\n"]
-    for i, t in enumerate(tasks, 1):
-        deadline_part = f" (до {t['deadline']})" if t.get("deadline") else ""
-        lines.append(f"{i}. {t['title']}{deadline_part}")
-    lines.append(f"\n🌐 Кабинет: {cabinet_url}")
-    await message.answer("\n".join(lines), reply_markup=inline)
+    builder = InlineKeyboardBuilder()
+    for task in tasks:
+        title = task['title'][:40] + "..." if len(task['title']) > 40 else task['title']
+        deadline = f" (до {task['deadline']})" if task.get('deadline') else ""
+        builder.button(text=f"{title}{deadline}", callback_data=f"manage_task_{task['id']}")
+    builder.adjust(1)
+
+    await message.answer(
+        "📋 **Ваши активные задачи**\n\nВыберите задачу для управления:",
+        parse_mode="Markdown",
+        reply_markup=builder.as_markup()
+    )
 
 
 @router.message(Command("cabinet"))
@@ -165,7 +164,7 @@ async def cmd_back(message: Message) -> None:
     )
 
 
-# ---------- НОВЫЕ ФУНКЦИИ: статистика, достижения, дедлайны ----------
+# ---------- Статистика, достижения, дедлайны ----------
 @router.message(Command("stats"))
 @router.message(F.text == "📊 Статистика")
 async def cmd_stats(message: Message) -> None:
@@ -240,19 +239,19 @@ async def cmd_deadlines(message: Message) -> None:
     await message.answer("\n".join(lines), parse_mode="Markdown", reply_markup=_main_keyboard())
 
 
-# ---------- Кнопка теста пользовательского сценария ----------
+# ---------- Кнопка теста ----------
 @router.message(F.text == "🧪 Тест сценария")
 async def cmd_test_scenario(message: Message) -> None:
     uid = message.from_user.id
     cabinet_url = f"{WEB_BASE_URL}/cabinet/{uid}"
     await message.answer(
-        "🧪 **Демо-сценарий PM-Assist Bot**\n\n"
+        f"🧪 **Демо-сценарий PM-Assist Bot**\n\n"
         "1. Добавьте меня в групповой чат, если ещё не сделали.\n"
         "2. Напишите в чате: `@someone подготовить отчёт до пятницы`\n"
         "   → Я автоматически создам карточку в YouGile.\n"
         "3. Нажмите «Отменить» под созданной задачей, чтобы удалить её.\n"
         "4. Отправьте голосовое: «Сделать презентацию к завтра»\n"
-        "5. Откройте веб-кабинет: {}\n"
+        f"5. Откройте веб-кабинет: {cabinet_url}\n"
         "6. Там вы увидите XP, уровень, ачивки.\n"
         "7. Выполните задачу – карточка переместится в «Готово».\n\n"
         "🎯 **Команды**: /stats, /achievements, /deadlines, /away, /back",
