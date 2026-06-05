@@ -1,26 +1,13 @@
 import logging
-from typing import Optional
-
 from aiogram import Router
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-
+from aiogram.types import CallbackQuery
 from yougile_client import YouGileClient
-from config import YOUGILE_TOKEN, WEB_BASE_URL
+from config import YOUGILE_TOKEN
 from web.database import get_task_by_id, delete_task
 
 logger = logging.getLogger(__name__)
 router = Router()
 
-
-def _cabinet_button(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
-    if "localhost" in WEB_BASE_URL or "127.0.0.1" in WEB_BASE_URL:
-        return None
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🌐 Открыть личный кабинет", url=f"{WEB_BASE_URL}/cabinet/{telegram_id}")
-    ]])
-
-
-# ───── Обработчик отмены задачи (после автоматического создания) ─────
 @router.callback_query(lambda c: c.data.startswith("cancel_task_"))
 async def cancel_task_callback(callback: CallbackQuery):
     task_uuid = callback.data.removeprefix("cancel_task_")

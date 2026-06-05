@@ -108,6 +108,16 @@ class YouGileClient:
         except requests.RequestException as e:
             logger.error(f"Ошибка сети при перемещении задачи: {e}")
             return False
+    
+    def delete_task(self, card_id: str) -> bool:
+        url = f"{self.BASE_URL}/tasks/{card_id}"
+        payload = {"deleted": True}
+        try:
+            response = requests.put(url, headers=self.headers, json=payload, timeout=_HTTP_TIMEOUT)
+            return response.status_code == 200
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при удалении задачи {card_id}: {e}")
+            return False
 
     def get_column_id_by_title(self, board_id: str, title: str) -> Optional[str]:
         columns = self.get_columns(board_id)
@@ -128,17 +138,3 @@ class YouGileClient:
         logger.error(f"Ошибка получения пользователей доски ({response.status_code}): {response.text}")
         return None
     
-    def delete_task(self, card_id: str) -> bool:
-        """Помечает задачу как удалённую (deleted=True)."""
-        url = f"{self.BASE_URL}/tasks/{card_id}"
-        payload = {"deleted": True}
-        try:
-            response = requests.put(url, headers=self.headers, json=payload, timeout=_HTTP_TIMEOUT)
-            if response.status_code == 200:
-                logger.info(f"Задача {card_id} удалена")
-                return True
-            logger.error(f"Ошибка удаления задачи ({response.status_code}): {response.text}")
-            return False
-        except requests.RequestException as e:
-            logger.error(f"Ошибка сети при удалении задачи: {e}")
-            return False

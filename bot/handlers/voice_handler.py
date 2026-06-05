@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 router = Router()
 _CONFIDENCE_THRESHOLD = 50
 
-
 @router.message(F.voice | F.audio)
 async def handle_voice_message(message: Message, bot: Bot) -> None:
     add_user(
@@ -24,35 +23,30 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
     )
 
     status_msg = await message.answer("🎙 Обрабатываю голосовое сообщение...")
-
     file_path = None
     try:
         file_path = await download_telegram_audio(message, bot)
         transcribed_text = transcribe_audio(file_path)
-
         if not transcribed_text:
-            await status_msg.edit_text("❌ Не удалось распознать речь. Попробуйте написать текстом.")
+            await status_msg.edit_text("❌ Не удалось распознать речь.")
             return
 
         parse_result = parse_task(transcribed_text, known_usernames=[])
         if parse_result["confidence"] < _CONFIDENCE_THRESHOLD:
             await status_msg.edit_text(
-                f"🔊 Я услышал:\n{transcribed_text}\n\n"
-                "Не уверен, что это задача. Напишите её текстом, если нужно создать карточку."
+                f"🔊 Я услышал:\n{transcribed_text}\n\nНе уверен, что это задача."
             )
             return
 
-        # Автоматическое создание задачи в YouGile
         card_id = await create_yougile_task(
             title=parse_result["task"],
             description=transcribed_text,
             deadline_str=parse_result["deadline"],
         )
         if not card_id:
-            await status_msg.edit_text("❌ Не удалось создать задачу в YouGile. Проверьте настройки.")
+            await status_msg.edit_text("❌ Не удалось создать задачу в YouGile.")
             return
 
-        # Сохраняем в локальную БД
         task_uuid = str(uuid.uuid4())
         add_task(
             task_id=task_uuid,
@@ -65,7 +59,6 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
             chat_id=message.chat.id,
         )
 
-        # Кнопка отмены
         builder = InlineKeyboardBuilder()
         builder.button(text="❌ Отменить задачу", callback_data=f"cancel_task_{task_uuid}")
         builder.adjust(1)
@@ -78,10 +71,9 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
             f"Нажмите «Отменить», если задача создана ошибочно."
         )
         await status_msg.edit_text(reply_text, reply_markup=builder.as_markup())
-
     except Exception as e:
-        logger.error(f"Ошибка обработки голосового сообщения: {e}")
-        await status_msg.edit_text("⚠️ Произошла ошибка при обработке аудио. Попробуйте позже.")
+        logger.error(f"Ошибка в voice_handler: {e}")
+        await status_msg.edit_text("⚠️ Произошла ошибка при обработке аудио.")
     finally:
         if file_path:
             cleanup_temp_file(file_path)

@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 router = Router()
 _CONFIDENCE_THRESHOLD = 50
 
-
 @router.message(F.text, F.chat.type.in_({"group", "supergroup"}))
 async def handle_text_message(message: Message) -> None:
     add_user(
@@ -26,17 +25,15 @@ async def handle_text_message(message: Message) -> None:
     if parse_result["confidence"] < _CONFIDENCE_THRESHOLD:
         return
 
-    # Автоматическое создание задачи в YouGile
     card_id = await create_yougile_task(
         title=parse_result["task"],
         description=message.text,
         deadline_str=parse_result["deadline"],
     )
     if not card_id:
-        await message.reply("❌ Не удалось создать задачу в YouGile. Проверьте настройки.")
+        await message.reply("❌ Не удалось создать задачу в YouGile.")
         return
 
-    # Сохраняем в локальную БД
     task_uuid = str(uuid.uuid4())
     add_task(
         task_id=task_uuid,
@@ -49,7 +46,6 @@ async def handle_text_message(message: Message) -> None:
         chat_id=message.chat.id,
     )
 
-    # Кнопка отмены
     builder = InlineKeyboardBuilder()
     builder.button(text="❌ Отменить задачу", callback_data=f"cancel_task_{task_uuid}")
     builder.adjust(1)
