@@ -1,22 +1,21 @@
 import logging
-from typing import Dict, Any
 import uuid
-from aiogram import Router, F, Bot
+from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.utils.parser import parse_task
 from bot.utils.date_utils import deadline_to_timestamp
-from bot.handlers.callbacks import _create_yougile_task
+from bot.utils.yougile_utils import create_yougile_task
 from web.database import add_user, add_task
-from config import YOUGILE_TOKEN, YOUGILE_BOARD_ID
 
 logger = logging.getLogger(__name__)
 router = Router()
 _CONFIDENCE_THRESHOLD = 50
 
+
 @router.message(F.text, F.chat.type.in_({"group", "supergroup"}))
-async def handle_text_message(message: Message, bot: Bot) -> None:
+async def handle_text_message(message: Message) -> None:
     add_user(
         telegram_id=message.from_user.id,
         username=message.from_user.username,
@@ -27,8 +26,8 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     if parse_result["confidence"] < _CONFIDENCE_THRESHOLD:
         return
 
-    # Автоматически создаём задачу в YouGile
-    card_id = await _create_yougile_task(
+    # Автоматическое создание задачи в YouGile
+    card_id = await create_yougile_task(
         title=parse_result["task"],
         description=message.text,
         deadline_str=parse_result["deadline"],
@@ -37,7 +36,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         await message.reply("❌ Не удалось создать задачу в YouGile. Проверьте настройки.")
         return
 
-    # Сохраняем задачу в локальную БД
+    # Сохраняем в локальную БД
     task_uuid = str(uuid.uuid4())
     add_task(
         task_id=task_uuid,
@@ -50,7 +49,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         chat_id=message.chat.id,
     )
 
-    # Формируем сообщение об успехе с кнопкой отмены
+    # Кнопка отмены
     builder = InlineKeyboardBuilder()
     builder.button(text="❌ Отменить задачу", callback_data=f"cancel_task_{task_uuid}")
     builder.adjust(1)

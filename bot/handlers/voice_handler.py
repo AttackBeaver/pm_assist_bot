@@ -1,7 +1,5 @@
 import logging
 import uuid
-from typing import Dict, Any
-
 from aiogram import Router, F, Bot
 from aiogram.types import Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -9,7 +7,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.utils.audio_utils import download_telegram_audio, transcribe_audio, cleanup_temp_file
 from bot.utils.parser import parse_task
 from bot.utils.date_utils import deadline_to_timestamp
-from bot.handlers.callbacks import _create_yougile_task
+from bot.utils.yougile_utils import create_yougile_task
 from web.database import add_user, add_task
 
 logger = logging.getLogger(__name__)
@@ -33,9 +31,7 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
         transcribed_text = transcribe_audio(file_path)
 
         if not transcribed_text:
-            await status_msg.edit_text(
-                "❌ Не удалось распознать речь. Попробуйте написать текстом."
-            )
+            await status_msg.edit_text("❌ Не удалось распознать речь. Попробуйте написать текстом.")
             return
 
         parse_result = parse_task(transcribed_text, known_usernames=[])
@@ -46,8 +42,8 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
             )
             return
 
-        # --- Автоматическое создание задачи в YouGile ---
-        card_id = await _create_yougile_task(
+        # Автоматическое создание задачи в YouGile
+        card_id = await create_yougile_task(
             title=parse_result["task"],
             description=transcribed_text,
             deadline_str=parse_result["deadline"],
@@ -56,7 +52,7 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
             await status_msg.edit_text("❌ Не удалось создать задачу в YouGile. Проверьте настройки.")
             return
 
-        # Сохраняем задачу в локальную БД
+        # Сохраняем в локальную БД
         task_uuid = str(uuid.uuid4())
         add_task(
             task_id=task_uuid,
@@ -69,7 +65,7 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
             chat_id=message.chat.id,
         )
 
-        # Формируем сообщение об успехе с кнопкой отмены
+        # Кнопка отмены
         builder = InlineKeyboardBuilder()
         builder.button(text="❌ Отменить задачу", callback_data=f"cancel_task_{task_uuid}")
         builder.adjust(1)
@@ -85,9 +81,7 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
 
     except Exception as e:
         logger.error(f"Ошибка обработки голосового сообщения: {e}")
-        await status_msg.edit_text(
-            "⚠️ Произошла ошибка при обработке аудио. Попробуйте позже."
-        )
+        await status_msg.edit_text("⚠️ Произошла ошибка при обработке аудио. Попробуйте позже.")
     finally:
         if file_path:
             cleanup_temp_file(file_path)
