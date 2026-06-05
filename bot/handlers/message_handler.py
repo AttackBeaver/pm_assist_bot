@@ -19,6 +19,7 @@ _CONFIDENCE_THRESHOLD = 60
 
 @router.message(F.text, F.chat.type.in_({"group", "supergroup"}))
 async def handle_text_message(message: Message) -> None:
+    logger.info(f"Получено сообщение в группе: {message.text[:50]}")   
     add_user(
         telegram_id=message.from_user.id,
         username=message.from_user.username,

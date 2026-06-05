@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 async def main() -> None:
     bot = Bot(token=BOT_TOKEN)
-    dp = Dispatcher()    
+    await bot.delete_webhook(drop_pending_updates=True)
+    dp = Dispatcher()
     dp.include_router(user_commands.router)
     dp.include_router(message_handler.router)
     dp.include_router(voice_handler.router)
@@ -27,8 +28,8 @@ async def main() -> None:
     async with asyncio.TaskGroup() as tg:
         tg.create_task(reminder_worker(bot))
         tg.create_task(evening_digest_worker(bot))
-        tg.create_task(stale_task_reminder_worker(bot))   # <-- добавлено
-        tg.create_task(dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types()))
+        tg.create_task(stale_task_reminder_worker(bot))
+        tg.create_task(dp.start_polling(bot, allowed_updates=['message', 'callback_query', 'my_chat_member']))
 
 
 if __name__ == "__main__":
