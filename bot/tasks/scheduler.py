@@ -46,8 +46,8 @@ async def reminder_worker(bot: Bot) -> None:
                 try:
                     await bot.send_message(
                         user["telegram_id"],
-                        f"⏰ *Напоминание:* задача *{task['title']}* "
-                        f"должна быть выполнена через {label}\\!\n"
+                        f"⏰ Напоминание: задача «{task['title']}» "
+                        f"должна быть выполнена через {label}!\n"
                         f"Дедлайн: {deadline_fmt}",
                     )
                 except Exception as e:
@@ -61,10 +61,10 @@ async def reminder_worker(bot: Bot) -> None:
                     try:
                         await bot.send_message(
                             task["chat_id"],
-                            f"⏰ *Напоминание:* задача *{task['title']}* "
-                            f"\\(ответственный: {mention}\\) — через {label}",
+                            f"⏰ Напоминание: задача «{task['title']}» "
+                            f"(ответственный: {mention}) — через {label}",
                         )
-                    except Exception as e:
+                    except Exception as e:                        
                         logger.error(
                             f"Ошибка отправки напоминания в чат {task['chat_id']}: {e}"
                         )
@@ -90,11 +90,10 @@ async def evening_digest_worker(bot: Bot) -> None:
                 if not tasks:
                     continue
 
-                lines = ["📋 *Ваш вечерний дайджест задач:*\n"]
+                lines = ["📋 Ваш вечерний дайджест задач:\n"]
                 for t in tasks:
-                    deadline_part = f" \\(до {t['deadline']}\\)" if t.get("deadline") else ""
+                    deadline_part = f" (до {t['deadline']})" if t.get("deadline") else ""
                     lines.append(f"• {t['title']}{deadline_part}")
-
                 try:
                     await bot.send_message(uid, "\n".join(lines))
                 except Exception as e:

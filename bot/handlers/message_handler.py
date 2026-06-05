@@ -46,14 +46,14 @@ async def handle_text_message(message: Message) -> None:
     builder.button(text="❌ Отмена", callback_data=f"cancel_text_{callback_id}")
     builder.adjust(1)
 
-    lines = [f"*Задача:* {parse_result['task']}"]
+    lines = [f"📋 Задача: {parse_result['task']}"]
     if parse_result["deadline"]:
-        lines.append(f"*Дедлайн:* {parse_result['deadline']}")
+        lines.append(f"⏰ Дедлайн: {parse_result['deadline']}")
     if parse_result["assignee"]:
-        lines.append(f"*Ответственный:* @{parse_result['assignee']}")
+        lines.append(f"👤 Ответственный: @{parse_result['assignee']}")
     task_info = "\n".join(lines)
 
     await message.reply(
-        f"📝 Найдена задача:\n{task_info}\n\nСоздать карточку в YouGile?",
+        f"📝 Найдена задача:\n\n{task_info}\n\nСоздать карточку в YouGile?",
         reply_markup=builder.as_markup(),
     )

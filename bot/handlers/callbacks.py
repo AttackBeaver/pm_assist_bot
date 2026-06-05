@@ -3,21 +3,31 @@ import uuid
 from typing import Dict, Any, Optional
 
 from aiogram import Router
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from yougile_client import YouGileClient
-from config import YOUGILE_TOKEN, YOUGILE_BOARD_ID
+from config import YOUGILE_TOKEN, YOUGILE_BOARD_ID, WEB_BASE_URL
 from bot.utils.date_utils import deadline_to_timestamp
 from web.database import add_task
 from bot.handlers.message_handler import pending_text_tasks
 from bot.handlers.voice_handler import pending_tasks
-
 logger = logging.getLogger(__name__)
 router = Router()
 
 
-async def _create_yougile_task(
-    title: str,
+def _cabinet_button(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
+    """Inline-кнопка перехода в личный кабинет.
+    Возвращает None если URL локальный (Telegram не принимает localhost)."""
+    if "localhost" in WEB_BASE_URL or "127.0.0.1" in WEB_BASE_URL:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="🌐 Открыть личный кабинет",
+            url=f"{WEB_BASE_URL}/cabinet/{telegram_id}",
+        )
+    ]])
+
+async def _create_yougile_task(    title: str,
     description: str,
     deadline_str: Optional[str] = None,
 ) -> Optional[str]:
@@ -66,17 +76,16 @@ async def _handle_confirm(
             chat_id=chat_id,
         )
         await callback.message.edit_text(
-            f"✅ Задача создана в YouGile\\!\n\n"
-            f"*Название:* {task_data['title']}\n"
-            f"*Дедлайн:* {task_data['deadline_str'] or 'не указан'}\n"
-            f"*ID карточки:* `{card_id}`"
+            f"✅ Задача создана в YouGile!\n\n"
+            f"📋 Название: {task_data['title']}\n"
+            f"⏰ Дедлайн: {task_data['deadline_str'] or 'не указан'}\n"
+            f"🔗 ID карточки: {card_id}",
+            reply_markup=_cabinet_button(responsible_id),
         )
     else:
         await callback.message.edit_text(
-            "❌ Не удалось создать задачу в YouGile\\. Проверьте настройки интеграции\\."
+            "❌ Не удалось создать задачу в YouGile. Проверьте настройки интеграции."
         )
-
-
 # ── Текстовые задачи ──────────────────────────────────────────────────────────
 
 @router.callback_query(lambda c: c.data.startswith("confirm_text_"))
@@ -101,9 +110,8 @@ async def confirm_text_task(callback: CallbackQuery) -> None:
 @router.callback_query(lambda c: c.data.startswith("cancel_text_"))
 async def cancel_text_task(callback: CallbackQuery) -> None:
     pending_text_tasks.pop(callback.data.removeprefix("cancel_text_"), None)
-    await callback.message.edit_text("❌ Создание задачи отменено\\.")
+    await callback.message.edit_text("❌ Создание задачи отменено.")
     await callback.answer()
-
 
 # ── Голосовые задачи ──────────────────────────────────────────────────────────
 
@@ -129,5 +137,5 @@ async def confirm_voice_task(callback: CallbackQuery) -> None:
 @router.callback_query(lambda c: c.data.startswith("cancel_voice_"))
 async def cancel_voice_task(callback: CallbackQuery) -> None:
     pending_tasks.pop(callback.data.removeprefix("cancel_voice_"), None)
-    await callback.message.edit_text("❌ Создание задачи отменено\\.")
+    await callback.message.edit_text("❌ Создание задачи отменено.")
     await callback.answer()

@@ -21,3 +21,6 @@ if not YOUGILE_TOKEN:
     logger.warning("YOUGILE_TOKEN не задан — создание задач в YouGile недоступно")
 if not YOUGILE_BOARD_ID:
     logger.warning("YOUGILE_BOARD_ID не задан — создание задач в YouGile недоступно")
+
+# URL веб-кабинета (можно переопределить в .env для продакшена)
+WEB_BASE_URL: str = os.getenv("WEB_BASE_URL", "http://localhost:8000")

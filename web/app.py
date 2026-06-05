@@ -1,7 +1,12 @@
+﻿import os
+import sys
 from html import escape
 
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
+
+# При запуске напрямую (python web/app.py) корень проекта не в sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from web.database import get_tasks_by_user, complete_task, delete_task
 
@@ -106,7 +111,6 @@ _HTML_TEMPLATE = """\
 
 
 def _build_tasks_table(tasks: list, telegram_id: int) -> str:
-    """Формирует HTML-таблицу задач с экранированием пользовательских данных."""
     if not tasks:
         return (
             '<div class="empty-state">'
@@ -135,7 +139,7 @@ def _build_tasks_table(tasks: list, telegram_id: int) -> str:
             f'<form method="post" action="/task/{task_id}/delete" style="display:inline">'
             f'<input type="hidden" name="telegram_id" value="{tid}">'
             f'<button type="submit" class="btn btn-delete" '
-            f'onclick="return confirm(\'Удалить задачу?\')">🗑 Удалить</button>'
+            f"onclick=\"return confirm('Удалить задачу?')\">🗑 Удалить</button>"
             f"</form>"
         )
 
@@ -165,7 +169,6 @@ async def cabinet(telegram_id: int) -> HTMLResponse:
     total = len(tasks)
     completed = sum(1 for t in tasks if t["status"] == "completed")
     pending = total - completed
-
     return HTMLResponse(
         _HTML_TEMPLATE.format(
             telegram_id=telegram_id,
@@ -198,4 +201,4 @@ if __name__ == "__main__":
     import uvicorn
     print("🚀 Запуск личного кабинета PM Assist")
     print("📱 Откройте в браузере: http://localhost:8000/cabinet/YOUR_TELEGRAM_ID")
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -35,16 +35,15 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
 
         if not transcribed_text:
             await status_msg.edit_text(
-                "❌ Не удалось распознать речь\\. Попробуйте написать текстом\\."
+                "❌ Не удалось распознать речь. Попробуйте написать текстом."
             )
             return
-
         parse_result = parse_task(transcribed_text, known_usernames=[])
 
         if parse_result["confidence"] < _CONFIDENCE_THRESHOLD:
             await status_msg.edit_text(
-                f"🔊 Я услышал:\n_{transcribed_text}_\n\n"
-                "Не уверен, что это задача\\. Напишите её текстом, если нужно создать карточку\\."
+                f"🔊 Я услышал:\n{transcribed_text}\n\n"
+                "Не уверен, что это задача. Напишите её текстом, если нужно создать карточку."
             )
             return
 
@@ -68,10 +67,10 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
         builder.adjust(1)
 
         await status_msg.edit_text(
-            f"🔊 *Распознанный текст:*\n_{transcribed_text}_\n\n"
-            f"*Задача:* {task_title}\n"
-            f"*Дедлайн:* {deadline_str}\n"
-            f"*Ответственный:* {assignee}\n\n"
+            f"🔊 Распознанный текст:\n{transcribed_text}\n\n"
+            f"📋 Задача: {task_title}\n"
+            f"⏰ Дедлайн: {deadline_str}\n"
+            f"👤 Ответственный: {assignee}\n\n"
             "Создать карточку в YouGile?",
             reply_markup=builder.as_markup(),
         )
@@ -79,8 +78,8 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
     except Exception as e:
         logger.error(f"Ошибка обработки голосового сообщения: {e}")
         await status_msg.edit_text(
-            "⚠️ Произошла ошибка при обработке аудио\\. Попробуйте позже\\."
+            "⚠️ Произошла ошибка при обработке аудио. Попробуйте позже."
         )
-    finally:
+    finally:        
         if file_path:
             cleanup_temp_file(file_path)
