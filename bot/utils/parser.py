@@ -64,21 +64,23 @@ def _calculate_confidence(
     assignee: Optional[str],
     text_lower: str,
 ) -> int:
-    """Оценивает вероятность того, что сообщение является задачей (0–100)."""
     has_task = len(task) > 5
     has_deadline = deadline is not None
     has_assignee = assignee is not None
-    has_keyword = any(
-        re.search(rf'\b{kw}\b', text_lower) for kw in _TASK_KEYWORDS
-    )
-
-    if not has_keyword and not has_task:
-        return 0
+    has_keyword = any(re.search(rf'\b{kw}\b', text_lower) for kw in _TASK_KEYWORDS)
+    
+    # Без ключевого слова задача считается только если есть дедлайн или ответственный
+    if not has_keyword:
+        if has_deadline or has_assignee:
+            return 60   # допустимо, но не высоко
+        else:
+            return 0    # иначе это не задача
+    
+    # Если ключевое слово есть:
     if has_task and has_deadline and has_assignee:
         return 90
     if has_task and (has_deadline or has_assignee):
-        return 70
+        return 75
     if has_task:
-        return 50
-    # Есть ключевые слова, но задача не выделена чётко
+        return 55       # чуть выше будущего порога
     return 30

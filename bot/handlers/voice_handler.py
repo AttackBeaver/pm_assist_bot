@@ -15,7 +15,7 @@ router = Router()
 # Временное хранилище неподтверждённых голосовых задач (сбрасывается при перезапуске бота)
 pending_tasks: Dict[str, Dict[str, Any]] = {}
 
-_CONFIDENCE_THRESHOLD = 50
+_CONFIDENCE_THRESHOLD = 60
 
 
 @router.message(F.voice | F.audio)
