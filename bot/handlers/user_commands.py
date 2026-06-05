@@ -13,7 +13,11 @@ from aiogram.types import (
 )
 
 from config import WEB_BASE_URL
-from web.database import add_user, set_user_away, clear_user_away, get_tasks_by_user
+from web.database import (
+    add_user, set_user_away, clear_user_away,
+    get_tasks_by_user, get_user_stats, get_average_completion_time
+)
+
 logger = logging.getLogger(__name__)
 router = Router()
 
@@ -31,6 +35,11 @@ def _main_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text="✅ Доступен"),
             ],
             [
+                KeyboardButton(text="🏆 Достижения"),
+                KeyboardButton(text="📊 Статистика"),
+            ],
+            [
+                KeyboardButton(text="⏰ Ближайшие дедлайны"),
                 KeyboardButton(text="❓ Помощь"),
             ],
         ],
@@ -40,8 +49,7 @@ def _main_keyboard() -> ReplyKeyboardMarkup:
 
 
 def _cabinet_inline(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
-    """Inline-кнопка перехода в личный кабинет.
-    Возвращает None если URL локальный (Telegram не принимает localhost в кнопках)."""
+    """Inline-кнопка перехода в личный кабинет (только для публичного URL)."""
     url = f"{WEB_BASE_URL}/cabinet/{telegram_id}"
     if "localhost" in WEB_BASE_URL or "127.0.0.1" in WEB_BASE_URL:
         return None
@@ -49,6 +57,8 @@ def _cabinet_inline(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
         InlineKeyboardButton(text="🌐 Открыть личный кабинет", url=url)
     ]])
 
+
+# ---------- Основные команды ----------
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
     add_user(
@@ -79,20 +89,20 @@ async def cmd_help(message: Message) -> None:
         "/away [причина] — задачи не будут назначаться до отмены\n"
         "/back — снова доступен для задач\n"
         "/tasks — список моих задач\n"
-        "/cabinet — личный кабинет",
+        "/cabinet — личный кабинет\n"
+        "/stats — моя статистика (XP, уровень, эффективность)\n"
+        "/achievements — полученные достижения\n"
+        "/deadlines — ближайшие дедлайны",
         reply_markup=_main_keyboard(),
     )
 
-def _cabinet_url_text(telegram_id: int) -> str:
-    """Возвращает строку с URL кабинета для вставки в текст сообщения."""
-    return f"{WEB_BASE_URL}/cabinet/{telegram_id}"
 
-
+# ---------- Задачи ----------
 @router.message(Command("tasks"))
 @router.message(F.text == "📋 Мои задачи")
 async def cmd_tasks(message: Message) -> None:
     tasks = get_tasks_by_user(message.from_user.id, status="pending")
-    cabinet_url = _cabinet_url_text(message.from_user.id)
+    cabinet_url = f"{WEB_BASE_URL}/cabinet/{message.from_user.id}"
     inline = _cabinet_inline(message.from_user.id)
 
     if not tasks:
@@ -108,21 +118,20 @@ async def cmd_tasks(message: Message) -> None:
         deadline_part = f" (до {t['deadline']})" if t.get("deadline") else ""
         lines.append(f"{i}. {t['title']}{deadline_part}")
     lines.append(f"\n🌐 Кабинет: {cabinet_url}")
-    await message.answer(
-        "\n".join(lines),
-        reply_markup=inline,
-    )
+    await message.answer("\n".join(lines), reply_markup=inline)
 
 
 @router.message(Command("cabinet"))
 @router.message(F.text == "🌐 Личный кабинет")
 async def cmd_cabinet(message: Message) -> None:
-    cabinet_url = _cabinet_url_text(message.from_user.id)
+    cabinet_url = f"{WEB_BASE_URL}/cabinet/{message.from_user.id}"
     inline = _cabinet_inline(message.from_user.id)
     await message.answer(
         f"🌐 Личный кабинет — управление задачами:\n{cabinet_url}",
         reply_markup=inline,
     )
+
+
 @router.message(Command("away"))
 @router.message(F.text == "🚫 Недоступен")
 async def cmd_away(message: Message) -> None:
@@ -152,3 +161,80 @@ async def cmd_back(message: Message) -> None:
         "✅ Вы снова доступны для задач.",
         reply_markup=_main_keyboard(),
     )
+
+
+# ---------- НОВЫЕ ФУНКЦИИ: статистика, достижения, дедлайны ----------
+@router.message(Command("stats"))
+@router.message(F.text == "📊 Статистика")
+async def cmd_stats(message: Message) -> None:
+    uid = message.from_user.id
+    stats = get_user_stats(uid)
+    avg_time = get_average_completion_time(uid)
+    tasks_total = len(get_tasks_by_user(uid))
+    tasks_completed = len([t for t in get_tasks_by_user(uid) if t["status"] == "completed"])
+    tasks_pending = tasks_total - tasks_completed
+
+    msg = (
+        f"📊 **Ваша статистика**\n\n"
+        f"✨ Опыт (XP): **{stats['xp']}**\n"
+        f"🧙‍♂️ Уровень: **{stats['level']}**\n"
+        f"📋 Всего задач: **{tasks_total}**\n"
+        f"🟢 В работе: **{tasks_pending}**\n"
+        f"✅ Выполнено: **{tasks_completed}**\n"
+        f"⏱ Среднее время выполнения: **{avg_time:.1f} ч**" if avg_time else "⏱ Среднее время выполнения: **—**"
+    )
+    await message.answer(msg, parse_mode="Markdown", reply_markup=_main_keyboard())
+
+
+@router.message(Command("achievements"))
+@router.message(F.text == "🏆 Достижения")
+async def cmd_achievements(message: Message) -> None:
+    uid = message.from_user.id
+    stats = get_user_stats(uid)
+    achievements = stats.get("achievements", [])
+    if not achievements:
+        await message.answer(
+            "🏆 У вас пока нет достижений.\n\n"
+            "Выполняйте задачи, чтобы получать ачивки:\n"
+            "• 🎯 Первая задача — создать первую задачу\n"
+            "• ⚡ Спринтер — выполнить 3 задачи\n"
+            "• 🧙‍♂️ Мастер — достичь 2 уровня (200 XP)",
+            reply_markup=_main_keyboard()
+        )
+        return
+    lines = ["🏆 **Ваши достижения**:\n"]
+    for ach in achievements:
+        icon = "🏆"
+        if "Первая" in ach:
+            icon = "🎯"
+        elif "Спринтер" in ach:
+            icon = "⚡"
+        elif "Мастер" in ach:
+            icon = "🧙"
+        lines.append(f"{icon} {ach}")
+    await message.answer("\n".join(lines), parse_mode="Markdown", reply_markup=_main_keyboard())
+
+
+@router.message(Command("deadlines"))
+@router.message(F.text == "⏰ Ближайшие дедлайны")
+async def cmd_deadlines(message: Message) -> None:
+    uid = message.from_user.id
+    tasks = get_tasks_by_user(uid, status="pending")
+    # Фильтруем задачи, у которых есть дедлайн (строка deadline не пуста)
+    upcoming = [t for t in tasks if t.get("deadline") and t["deadline"] != "Не указан"]
+    if not upcoming:
+        await message.answer(
+            "⏰ У вас нет запланированных дедлайнов.\n"
+            "Создайте задачу с указанием срока (например, «сделать отчёт до пятницы»).",
+            reply_markup=_main_keyboard()
+        )
+        return
+    # Сортируем по дате (чем раньше — тем выше)
+    try:
+        upcoming.sort(key=lambda x: datetime.strptime(x["deadline"], "%Y-%m-%d") if x["deadline"] else datetime.max)
+    except:
+        pass
+    lines = ["⏰ **Ближайшие дедлайны** (первые 5):\n"]
+    for i, t in enumerate(upcoming[:5], 1):
+        lines.append(f"{i}. **{t['title']}** — до {t['deadline']}")
+    await message.answer("\n".join(lines), parse_mode="Markdown", reply_markup=_main_keyboard())

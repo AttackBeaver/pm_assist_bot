@@ -127,3 +127,18 @@ class YouGileClient:
             return response.json().get("content", [])
         logger.error(f"Ошибка получения пользователей доски ({response.status_code}): {response.text}")
         return None
+    
+    def delete_task(self, card_id: str) -> bool:
+        """Помечает задачу как удалённую (deleted=True)."""
+        url = f"{self.BASE_URL}/tasks/{card_id}"
+        payload = {"deleted": True}
+        try:
+            response = requests.put(url, headers=self.headers, json=payload, timeout=_HTTP_TIMEOUT)
+            if response.status_code == 200:
+                logger.info(f"Задача {card_id} удалена")
+                return True
+            logger.error(f"Ошибка удаления задачи ({response.status_code}): {response.text}")
+            return False
+        except requests.RequestException as e:
+            logger.error(f"Ошибка сети при удалении задачи: {e}")
+            return False

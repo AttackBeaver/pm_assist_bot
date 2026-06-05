@@ -1,4 +1,5 @@
 import logging
+import uuid
 from typing import Dict, Any
 
 from aiogram import Router, F, Bot
@@ -7,14 +8,12 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.utils.audio_utils import download_telegram_audio, transcribe_audio, cleanup_temp_file
 from bot.utils.parser import parse_task
-from web.database import add_user
+from bot.utils.date_utils import deadline_to_timestamp
+from bot.handlers.callbacks import _create_yougile_task
+from web.database import add_user, add_task
 
 logger = logging.getLogger(__name__)
 router = Router()
-
-# Временное хранилище неподтверждённых голосовых задач (сбрасывается при перезапуске бота)
-pending_tasks: Dict[str, Dict[str, Any]] = {}
-
 _CONFIDENCE_THRESHOLD = 50
 
 
@@ -38,8 +37,8 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
                 "❌ Не удалось распознать речь. Попробуйте написать текстом."
             )
             return
-        parse_result = parse_task(transcribed_text, known_usernames=[])
 
+        parse_result = parse_task(transcribed_text, known_usernames=[])
         if parse_result["confidence"] < _CONFIDENCE_THRESHOLD:
             await status_msg.edit_text(
                 f"🔊 Я услышал:\n{transcribed_text}\n\n"
@@ -47,39 +46,48 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
             )
             return
 
-        task_title = parse_result["task"]
-        deadline_str = parse_result["deadline"] or "не указан"
-        assignee = parse_result["assignee"] or "не назначен"
+        # --- Автоматическое создание задачи в YouGile ---
+        card_id = await _create_yougile_task(
+            title=parse_result["task"],
+            description=transcribed_text,
+            deadline_str=parse_result["deadline"],
+        )
+        if not card_id:
+            await status_msg.edit_text("❌ Не удалось создать задачу в YouGile. Проверьте настройки.")
+            return
 
-        callback_id = f"voice_{message.message_id}"
-        pending_tasks[callback_id] = {
-            "title": task_title,
-            "description": transcribed_text,
-            "deadline_str": parse_result["deadline"],
-            "assignee_username": parse_result["assignee"],
-            "chat_id": message.chat.id,
-            "from_user_id": message.from_user.id,
-        }
+        # Сохраняем задачу в локальную БД
+        task_uuid = str(uuid.uuid4())
+        add_task(
+            task_id=task_uuid,
+            title=parse_result["task"],
+            description=transcribed_text,
+            responsible_telegram_id=message.from_user.id,
+            deadline=parse_result["deadline"],
+            deadline_timestamp=deadline_to_timestamp(parse_result["deadline"]) if parse_result["deadline"] else None,
+            yougile_card_id=card_id,
+            chat_id=message.chat.id,
+        )
 
+        # Формируем сообщение об успехе с кнопкой отмены
         builder = InlineKeyboardBuilder()
-        builder.button(text="✅ Да, создать задачу", callback_data=f"confirm_voice_{callback_id}")
-        builder.button(text="❌ Отмена", callback_data=f"cancel_voice_{callback_id}")
+        builder.button(text="❌ Отменить задачу", callback_data=f"cancel_task_{task_uuid}")
         builder.adjust(1)
 
-        await status_msg.edit_text(
-            f"🔊 Распознанный текст:\n{transcribed_text}\n\n"
-            f"📋 Задача: {task_title}\n"
-            f"⏰ Дедлайн: {deadline_str}\n"
-            f"👤 Ответственный: {assignee}\n\n"
-            "Создать карточку в YouGile?",
-            reply_markup=builder.as_markup(),
+        reply_text = (
+            f"✅ Задача автоматически создана в YouGile!\n\n"
+            f"📋 {parse_result['task']}\n"
+            f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n"
+            f"👤 Ответственный: @{parse_result['assignee'] or 'не назначен'}\n\n"
+            f"Нажмите «Отменить», если задача создана ошибочно."
         )
+        await status_msg.edit_text(reply_text, reply_markup=builder.as_markup())
 
     except Exception as e:
         logger.error(f"Ошибка обработки голосового сообщения: {e}")
         await status_msg.edit_text(
             "⚠️ Произошла ошибка при обработке аудио. Попробуйте позже."
         )
-    finally:        
+    finally:
         if file_path:
             cleanup_temp_file(file_path)
