@@ -3,43 +3,63 @@ import dateparser
 from datetime import datetime, timezone
 from typing import Optional
 
-# Все возможные формы дней недели
-days = r'(понедельник|понедельника|понедельнику|понедельник|понедельником|понедельнике|' \
-       r'вторник|вторника|вторнику|вторник|вторником|вторнике|' \
-       r'среда|среды|среде|среду|средой|среде|' \
-       r'четверг|четверга|четвергу|четверг|четвергом|четверге|' \
-       r'пятница|пятницы|пятнице|пятницу|пятницей|пятнице|' \
-       r'суббота|субботы|субботе|субботу|субботой|субботе|' \
-       r'воскресенье|воскресенья|воскресенью|воскресенье|воскресеньем|воскресенье)'
+# Падежные формы дней недели (без дублей)
+_DAYS = (
+    r'(?:'
+    r'понедельник[аеуи]?|понедельником|'
+    r'вторник[аеу]?|вторником|'
+    r'сред[аыеу]|средой|'
+    r'четверг[аеу]?|четвергом|'
+    r'пятниц[аыеу]|пятницей|'
+    r'суббот[аыеу]|субботой|'
+    r'воскресень[еяю]|воскресеньем'
+    r')'
+)
+
+_DEADLINE_PATTERNS = [
+    rf'(?:до|к)\s+\d{{1,2}}:\d{{2}}',
+    rf'(?:до|к)\s+\d{{1,2}}[./\-]\d{{1,2}}(?:[./\-]\d{{2,4}})?',
+    rf'(?:до|к)\s+{_DAYS}',
+    r'\bзавтра\b',
+    r'\bпослезавтра\b',
+    r'через\s+\d+\s+(?:дня|дней|часов?|неделю|недели|месяц[а]?)',
+    rf'\b{_DAYS}\b',
+]
+
+_DEFAULT_END_OF_DAY = "23:59:59"
+_DATEPARSER_SETTINGS = {
+    "PREFER_DATES_FROM": "future",
+    "TIMEZONE": "Europe/Moscow",
+    "RETURN_AS_TIMEZONE_AWARE": True,
+}
+
 
 def parse_deadline(text: str) -> Optional[str]:
+    """Ищет упоминание дедлайна в тексте, возвращает найденную подстроку или None."""
     text_lower = text.lower()
-    patterns = [
-        r'(до|к)\s+\d{1,2}:\d{2}',
-        r'(до|к)\s+\d{1,2}[\.\/\-]\d{1,2}',
-        r'(до|к)\s+\d{1,2}[\.\/\-]\d{1,2}[\.\/\-]\d{2,4}',
-        rf'(до|к)\s+{days}',
-        r'\bзавтра\b',
-        r'\bпослезавтра\b',
-        r'через\s+\d+\s+(дня|дней|часов|час|неделю|недели|месяц|месяца)',
-        rf'\b{days}\b'
-    ]
-    for pattern in patterns:
+    for pattern in _DEADLINE_PATTERNS:
         match = re.search(pattern, text_lower)
         if match:
             return match.group(0)
     return None
 
-def deadline_to_timestamp(deadline_str: str, reference_date: Optional[datetime] = None) -> Optional[int]:
+
+def deadline_to_timestamp(
+    deadline_str: str,
+    reference_date: Optional[datetime] = None,
+) -> Optional[int]:
+    """Конвертирует строку дедлайна в Unix-timestamp в миллисекундах или None."""
     if not deadline_str:
         return None
-    default_time = "23:59:59"
+
     settings = {
-        'PREFER_DATES_FROM': 'future',
-        'RELATIVE_BASE': reference_date or datetime.now(timezone.utc),
-        'TIMEZONE': 'Europe/Moscow',
+        **_DATEPARSER_SETTINGS,
+        "RELATIVE_BASE": reference_date or datetime.now(timezone.utc),
     }
+
     parsed = dateparser.parse(deadline_str, settings=settings)
+    # Если время не указано явно — ставим конец дня
     if parsed is None and not re.search(r'\d{1,2}:\d{2}', deadline_str):
-        parsed = dateparser.parse(deadline_str + " " + default_time, settings=settings)
+        parsed = dateparser.parse(f"{deadline_str} {_DEFAULT_END_OF_DAY}", settings=settings)
+
     return int(parsed.timestamp() * 1000) if parsed else None
