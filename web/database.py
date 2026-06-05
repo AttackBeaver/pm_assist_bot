@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -6,9 +7,7 @@ from typing import Any, Dict, Generator, List, Optional
 
 DB_PATH = Path(__file__).parent / "tasks.db"
 
-
 def init_db() -> None:
-    """Создаёт таблицы задач и пользователей, если их нет."""
     with _connect() as conn:
         conn.executescript('''
         CREATE TABLE IF NOT EXISTS tasks (
@@ -32,17 +31,31 @@ def init_db() -> None:
             away_reason TEXT,
             away_until TEXT
         );
+        CREATE TABLE IF NOT EXISTS user_stats (
+            telegram_id INTEGER PRIMARY KEY,
+            xp INTEGER DEFAULT 0,
+            level INTEGER DEFAULT 1,
+            achievements TEXT DEFAULT '[]',
+            tasks_completed INTEGER DEFAULT 0,
+            tasks_created INTEGER DEFAULT 0
+        );
         ''')
-        
-        # Миграция: добавляем completed_at, если её нет (для существующих БД)
+        # Миграции
         try:
             conn.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT")
         except sqlite3.OperationalError:
-            pass  # Колонка уже существует
+            pass
+        try:
+            conn.execute("ALTER TABLE user_stats ADD COLUMN tasks_completed INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE user_stats ADD COLUMN tasks_created INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
 
 @contextmanager
 def _connect() -> Generator[sqlite3.Connection, None, None]:
-    """Контекстный менеджер: открывает соединение с БД и закрывает после блока."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
@@ -51,215 +64,188 @@ def _connect() -> Generator[sqlite3.Connection, None, None]:
     finally:
         conn.close()
 
-
-# Инициализируем БД при первом импорте модуля
 init_db()
 
-
-# ── Пользователи ──────────────────────────────────────────────────────────────
-
-def add_user(
-    telegram_id: int,
-    username: Optional[str] = None,
-    full_name: Optional[str] = None,
-) -> None:
-    """Добавляет пользователя в БД, если его ещё нет."""
+# --- Пользователи ---
+def add_user(telegram_id: int, username: Optional[str] = None, full_name: Optional[str] = None) -> None:
     with _connect() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO users (telegram_id, username, full_name) VALUES (?, ?, ?)",
-            (telegram_id, username, full_name),
-        )
-
+        conn.execute("INSERT OR IGNORE INTO users (telegram_id, username, full_name) VALUES (?, ?, ?)",
+                     (telegram_id, username, full_name))
 
 def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
-    """Возвращает данные пользователя или None."""
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)
-        ).fetchone()
-    return dict(row) if row else None
-
+        row = conn.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+        return dict(row) if row else None
 
 def set_user_away(telegram_id: int, reason: str, until: Optional[datetime] = None) -> None:
-    """Помечает пользователя как недоступного."""
     until_str = until.isoformat() if until else None
     with _connect() as conn:
-        conn.execute(
-            "UPDATE users SET is_away = 1, away_reason = ?, away_until = ? WHERE telegram_id = ?",
-            (reason, until_str, telegram_id),
-        )
-
+        conn.execute("UPDATE users SET is_away = 1, away_reason = ?, away_until = ? WHERE telegram_id = ?",
+                     (reason, until_str, telegram_id))
 
 def clear_user_away(telegram_id: int) -> None:
-    """Снимает статус недоступности с пользователя."""
     with _connect() as conn:
-        conn.execute(
-            "UPDATE users SET is_away = 0, away_reason = NULL, away_until = NULL WHERE telegram_id = ?",
-            (telegram_id,),
-        )
-
+        conn.execute("UPDATE users SET is_away = 0, away_reason = NULL, away_until = NULL WHERE telegram_id = ?",
+                     (telegram_id,))
 
 def get_pending_user_ids() -> List[int]:
-    """Возвращает список telegram_id пользователей, у которых есть активные задачи."""
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT responsible_telegram_id FROM tasks WHERE status = 'pending'"
-        ).fetchall()
-    return [row["responsible_telegram_id"] for row in rows]
+        rows = conn.execute("SELECT DISTINCT responsible_telegram_id FROM tasks WHERE status = 'pending'").fetchall()
+        return [row["responsible_telegram_id"] for row in rows]
 
-
-# ── Задачи ────────────────────────────────────────────────────────────────────
-
-def add_task(
-    task_id: str,
-    title: str,
-    description: str,
-    responsible_telegram_id: int,
-    deadline: Optional[str] = None,
-    deadline_timestamp: Optional[int] = None,
-    yougile_card_id: Optional[str] = None,
-    chat_id: Optional[int] = None,
-) -> None:
-    """Сохраняет новую задачу в БД."""
+# --- Задачи ---
+def add_task(task_id: str, title: str, description: str, responsible_telegram_id: int,
+             deadline: Optional[str] = None, deadline_timestamp: Optional[int] = None,
+             yougile_card_id: Optional[str] = None, chat_id: Optional[int] = None) -> None:
     with _connect() as conn:
         conn.execute(
-            """
-            INSERT INTO tasks
-                (id, title, description, status, deadline, deadline_timestamp,
+            """INSERT INTO tasks (id, title, description, status, deadline, deadline_timestamp,
                  responsible_telegram_id, yougile_card_id, chat_id, created_at)
-            VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                task_id, title, description, deadline, deadline_timestamp,
-                responsible_telegram_id, yougile_card_id, chat_id,
-                datetime.now().isoformat(),
-            ),
+               VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)""",
+            (task_id, title, description, deadline, deadline_timestamp,
+             responsible_telegram_id, yougile_card_id, chat_id, datetime.now().isoformat())
         )
+    # Начисляем опыт за создание (+5 XP) и увеличиваем счётчик созданных
+    update_user_stats(responsible_telegram_id, xp_delta=5, tasks_created_delta=1)
+    # Проверка ачивки "Первая задача"
+    tasks = get_tasks_by_user(responsible_telegram_id)
+    if len(tasks) == 1:
+        update_user_stats(responsible_telegram_id, achievements_to_add=["🏅 Первая задача"])
 
-
-def get_tasks_by_user(
-    telegram_id: int,
-    status: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    """Возвращает задачи пользователя, опционально фильтруя по статусу."""
+def get_tasks_by_user(telegram_id: int, status: Optional[str] = None) -> List[Dict[str, Any]]:
     with _connect() as conn:
         if status:
             rows = conn.execute(
-                """
-                SELECT id, title, description, status, deadline, yougile_card_id
-                FROM tasks
-                WHERE responsible_telegram_id = ? AND status = ?
-                ORDER BY deadline_timestamp ASC
-                """,
-                (telegram_id, status),
+                """SELECT id, title, description, status, deadline, yougile_card_id
+                   FROM tasks WHERE responsible_telegram_id = ? AND status = ?
+                   ORDER BY deadline_timestamp ASC""",
+                (telegram_id, status)
             ).fetchall()
         else:
             rows = conn.execute(
-                """
-                SELECT id, title, description, status, deadline, yougile_card_id
-                FROM tasks
-                WHERE responsible_telegram_id = ?
-                ORDER BY
-                    CASE status WHEN 'pending' THEN 0 ELSE 1 END,
-                    deadline_timestamp ASC
-                """,
-                (telegram_id,),
+                """SELECT id, title, description, status, deadline, yougile_card_id
+                   FROM tasks WHERE responsible_telegram_id = ?
+                   ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, deadline_timestamp ASC""",
+                (telegram_id,)
             ).fetchall()
     return [dict(row) for row in rows]
 
 def get_task_by_id(task_id: str) -> Optional[Dict[str, Any]]:
-    """Возвращает задачу по ID или None."""
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM tasks WHERE id = ?", (task_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return dict(row) if row else None
 
-
 def get_all_active_tasks() -> List[Dict[str, Any]]:
-    """Возвращает все активные задачи с дедлайном (для планировщика напоминаний)."""
     with _connect() as conn:
         rows = conn.execute(
-            """
-            SELECT id, title, deadline_timestamp, responsible_telegram_id, chat_id
-            FROM tasks
-            WHERE status = 'pending' AND deadline_timestamp IS NOT NULL
-            """
+            """SELECT id, title, deadline_timestamp, responsible_telegram_id, chat_id
+               FROM tasks WHERE status = 'pending' AND deadline_timestamp IS NOT NULL"""
         ).fetchall()
-    return [dict(row) for row in rows]
-
+        return [dict(row) for row in rows]
 
 def get_tasks_with_upcoming_deadline(hours_before: int = 2) -> List[Dict[str, Any]]:
-    """Возвращает задачи, дедлайн которых наступит в течение hours_before часов."""
     now_ms = int(datetime.now().timestamp() * 1000)
     threshold_ms = now_ms + hours_before * 3_600_000
-    return [
-        t for t in get_all_active_tasks()
-        if t["deadline_timestamp"] and now_ms < t["deadline_timestamp"] <= threshold_ms
-    ]
-
+    return [t for t in get_all_active_tasks()
+            if t["deadline_timestamp"] and now_ms < t["deadline_timestamp"] <= threshold_ms]
 
 def complete_task(task_id: str) -> None:
-    """Помечает задачу как выполненную и записывает время завершения."""
+    # Получаем ответственного до обновления
+    task = get_task_by_id(task_id)
+    if not task:
+        return
+    responsible_id = task["responsible_telegram_id"]
+    # Обновляем статус и время завершения
     with _connect() as conn:
-        conn.execute(
-            "UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?",
-            (datetime.now().isoformat(), task_id),
-        )
-
+        conn.execute("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?",
+                     (datetime.now().isoformat(), task_id))
+    # Начисляем опыт за выполнение (+10 XP)
+    update_user_stats(responsible_id, xp_delta=10, tasks_completed_delta=1)
+    # Проверяем ачивки
+    new_achievements = []
+    with _connect() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE responsible_telegram_id = ? AND status = 'completed'",
+            (responsible_id,)
+        ).fetchone()[0]
+    if count >= 3:
+        new_achievements.append("⚡ Спринтер")
+    stats = get_user_stats(responsible_id)
+    if stats["level"] >= 2:
+        new_achievements.append("🧙‍♂️ Мастер")
+    if new_achievements:
+        update_user_stats(responsible_id, achievements_to_add=new_achievements)
 
 def delete_task(task_id: str) -> None:
-    """Удаляет задачу из БД."""
     with _connect() as conn:
         conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
 
-
-
-
-
-def get_average_completion_time() -> Optional[float]:
-    """Возвращает среднее время выполнения задач в часах или None."""
+def get_average_completion_time(telegram_id: int) -> Optional[float]:
+    """Среднее время выполнения задач (в часах) для конкретного пользователя по последним 5 задачам."""
     with _connect() as conn:
         rows = conn.execute(
-            """
-            SELECT created_at, completed_at
-            FROM tasks
-            WHERE status = 'completed' AND completed_at IS NOT NULL AND created_at IS NOT NULL
-            """
+            """SELECT created_at, completed_at FROM tasks
+               WHERE responsible_telegram_id = ? AND status = 'completed'
+               AND completed_at IS NOT NULL AND created_at IS NOT NULL
+               ORDER BY completed_at DESC LIMIT 5""",
+            (telegram_id,)
         ).fetchall()
-        
-        if not rows:
-            return None
-        
-        total_hours = 0.0
-        count = 0
-        for row in rows:
-            try:
-                created = datetime.fromisoformat(row["created_at"])
-                completed = datetime.fromisoformat(row["completed_at"])
-                hours = (completed - created).total_seconds() / 3600
-                if hours > 0:  # Игнорируем отрицательные значения
-                    total_hours += hours
-                    count += 1
-            except (ValueError, TypeError):
-                continue
-        
-        return total_hours / count if count > 0 else None
-    
-
-    from datetime import timedelta
+    if not rows:
+        return None
+    total_hours = 0.0
+    for row in rows:
+        created = datetime.fromisoformat(row["created_at"])
+        completed = datetime.fromisoformat(row["completed_at"])
+        total_hours += (completed - created).total_seconds() / 3600
+    return total_hours / len(rows)
 
 def get_stale_tasks(days_old: int = 3) -> List[Dict[str, Any]]:
-    """Возвращает задачи, которые находятся в статусе pending дольше days_old дней."""
     threshold = (datetime.now() - timedelta(days=days_old)).isoformat()
     with _connect() as conn:
         rows = conn.execute(
-            """
-            SELECT id, title, responsible_telegram_id, created_at
-            FROM tasks
-            WHERE status = 'pending' AND created_at < ?
-            """,
-            (threshold,),
+            "SELECT id, title, responsible_telegram_id, created_at FROM tasks WHERE status = 'pending' AND created_at < ?",
+            (threshold,)
         ).fetchall()
         return [dict(row) for row in rows]
-        
+
+# --- Геймификация ---
+def get_user_stats(telegram_id: int) -> Dict[str, Any]:
+    with _connect() as conn:
+        row = conn.execute("SELECT xp, level, achievements FROM user_stats WHERE telegram_id = ?", (telegram_id,)).fetchone()
+        if not row:
+            return {"xp": 0, "level": 1, "achievements": []}
+        return {
+            "xp": row["xp"],
+            "level": row["level"],
+            "achievements": json.loads(row["achievements"]) if row["achievements"] else []
+        }
+
+def update_user_stats(telegram_id: int, xp_delta: int = 0, achievements_to_add: List[str] = None,
+                      tasks_completed_delta: int = 0, tasks_created_delta: int = 0) -> None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT xp, level, achievements, tasks_completed, tasks_created FROM user_stats WHERE telegram_id = ?",
+            (telegram_id,)
+        ).fetchone()
+        if row:
+            new_xp = row["xp"] + xp_delta
+            new_level = 1 + (new_xp // 100)
+            achievements = json.loads(row["achievements"]) if row["achievements"] else []
+            if achievements_to_add:
+                for ach in achievements_to_add:
+                    if ach not in achievements:
+                        achievements.append(ach)
+            new_tasks_completed = row["tasks_completed"] + tasks_completed_delta
+            new_tasks_created = row["tasks_created"] + tasks_created_delta
+            conn.execute(
+                """UPDATE user_stats SET xp = ?, level = ?, achievements = ?,
+                    tasks_completed = ?, tasks_created = ? WHERE telegram_id = ?""",
+                (new_xp, new_level, json.dumps(achievements), new_tasks_completed, new_tasks_created, telegram_id)
+            )
+        else:
+            achievements = achievements_to_add if achievements_to_add else []
+            conn.execute(
+                """INSERT INTO user_stats (telegram_id, xp, level, achievements, tasks_completed, tasks_created)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (telegram_id, xp_delta, 1 + (xp_delta // 100), json.dumps(achievements), tasks_completed_delta, tasks_created_delta)
+            )
