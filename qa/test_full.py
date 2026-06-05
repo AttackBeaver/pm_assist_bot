@@ -361,7 +361,6 @@ def test_imports():
         from aiogram import Bot, Dispatcher
         from fastapi import FastAPI, Form
         import uvicorn
-        import dateparser
         import pytz
         import sqlalchemy
         import requests

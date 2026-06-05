@@ -46,7 +46,6 @@ def parse_deadline(text: str) -> Optional[str]:
 def deadline_to_timestamp(deadline_str: str, reference_date: Optional[datetime] = None) -> Optional[int]:
     """
     Преобразует строку дедлайна в Unix timestamp (миллисекунды).
-    Без использования dateparser, только стандартные модули.
     """
     if not deadline_str:
         return None
