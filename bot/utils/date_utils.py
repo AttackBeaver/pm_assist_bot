@@ -36,6 +36,8 @@ def parse_deadline(text: str) -> Optional[str]:
         r'(?:в|в конце)\s+(?:январе|феврале|марте|апреле|мае|июне|июле|августе|сентябре|октябре|ноябре|декабре)', # в июле
         r'(?:до|к)\s+концу\s+(?:недели|месяца|года)',
         r'(?:на|в)\s+(?:следующей|этой|будущей|прошлой)\s+неделе',
+        r'(?:до|к)\s+концу\s+недели',
+        r'(?:на|в)\s+(?:следующей|этой|будущей|прошлой)\s+неделе'   # до конца недели, к концу недели
     ]
     for pat in patterns:
         match = re.search(pat, text_lower)
@@ -126,7 +128,12 @@ def deadline_to_timestamp(deadline_str: str, reference_date: Optional[datetime] 
                         result_date = datetime(year, month_num, 1)
                     except ValueError:
                         pass
-
+   
+    if "конец недели" in dl or "конца недели" in dl:
+        days_until_sunday = (6 - now.weekday()) % 7
+        result_date = (now + timedelta(days=days_until_sunday)).replace(hour=23, minute=59, second=59)
+        return int(result_date.timestamp() * 1000)
+  
     # Если дата не найдена, считаем, что дедлайн сегодня
     if result_date is None:
         result_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -143,3 +150,5 @@ def deadline_to_timestamp(deadline_str: str, reference_date: Optional[datetime] 
         final = result_date.replace(hour=23, minute=59, second=59)
 
     return int(final.timestamp() * 1000)
+
+    

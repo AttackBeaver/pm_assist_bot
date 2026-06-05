@@ -40,6 +40,9 @@ def _main_keyboard() -> ReplyKeyboardMarkup:
             ],
             [
                 KeyboardButton(text="⏰ Ближайшие дедлайны"),
+                KeyboardButton(text="🧪 Тест сценария"),
+            ],
+            [
                 KeyboardButton(text="❓ Помощь"),
             ],
         ],
@@ -82,7 +85,7 @@ async def cmd_help(message: Message) -> None:
     await message.answer(
         "📌 Как я работаю:\n"
         "• В групповом чате читаю сообщения и ищу задачи\n"
-        "• Если нахожу — предлагаю создать карточку в YouGile\n"
+        "• Если нахожу — автоматически создаю карточку в YouGile\n"
         "• Голосовые сообщения тоже распознаю\n"
         "• Напоминаю о дедлайнах и присылаю вечерний дайджест\n\n"
         "Команды:\n"
@@ -135,7 +138,6 @@ async def cmd_cabinet(message: Message) -> None:
 @router.message(Command("away"))
 @router.message(F.text == "🚫 Недоступен")
 async def cmd_away(message: Message) -> None:
-    # Для кнопки причина не указывается; для команды — берём аргумент
     if message.text.startswith("/away"):
         args = message.text.split(maxsplit=1)
         reason = args[1] if len(args) > 1 else "Не указана"
@@ -220,7 +222,6 @@ async def cmd_achievements(message: Message) -> None:
 async def cmd_deadlines(message: Message) -> None:
     uid = message.from_user.id
     tasks = get_tasks_by_user(uid, status="pending")
-    # Фильтруем задачи, у которых есть дедлайн (строка deadline не пуста)
     upcoming = [t for t in tasks if t.get("deadline") and t["deadline"] != "Не указан"]
     if not upcoming:
         await message.answer(
@@ -229,7 +230,6 @@ async def cmd_deadlines(message: Message) -> None:
             reply_markup=_main_keyboard()
         )
         return
-    # Сортируем по дате (чем раньше — тем выше)
     try:
         upcoming.sort(key=lambda x: datetime.strptime(x["deadline"], "%Y-%m-%d") if x["deadline"] else datetime.max)
     except:
@@ -238,3 +238,24 @@ async def cmd_deadlines(message: Message) -> None:
     for i, t in enumerate(upcoming[:5], 1):
         lines.append(f"{i}. **{t['title']}** — до {t['deadline']}")
     await message.answer("\n".join(lines), parse_mode="Markdown", reply_markup=_main_keyboard())
+
+
+# ---------- Кнопка теста пользовательского сценария ----------
+@router.message(F.text == "🧪 Тест сценария")
+async def cmd_test_scenario(message: Message) -> None:
+    uid = message.from_user.id
+    cabinet_url = f"{WEB_BASE_URL}/cabinet/{uid}"
+    await message.answer(
+        "🧪 **Демо-сценарий PM-Assist Bot**\n\n"
+        "1. Добавьте меня в групповой чат, если ещё не сделали.\n"
+        "2. Напишите в чате: `@someone подготовить отчёт до пятницы`\n"
+        "   → Я автоматически создам карточку в YouGile.\n"
+        "3. Нажмите «Отменить» под созданной задачей, чтобы удалить её.\n"
+        "4. Отправьте голосовое: «Сделать презентацию к завтра»\n"
+        "5. Откройте веб-кабинет: {}\n"
+        "6. Там вы увидите XP, уровень, ачивки.\n"
+        "7. Выполните задачу – карточка переместится в «Готово».\n\n"
+        "🎯 **Команды**: /stats, /achievements, /deadlines, /away, /back",
+        parse_mode="Markdown",
+        reply_markup=_main_keyboard()
+    )

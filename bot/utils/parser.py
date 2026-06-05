@@ -112,14 +112,11 @@ _TASK_KEYWORDS = frozenset([
 
 def parse_task(text: str, known_usernames: list[str]) -> dict[str, Optional[str | int]]:
     text_lower = text.lower()
-    # 1. Ответственный – только @упоминания, и только если username есть в known_usernames
+    # 1. Ответственный – если есть @username, назначаем его (даже если нет в known_usernames)
     assignee = None
     at_mentions = re.findall(r'@([a-zA-Z0-9_]+)', text)
     if at_mentions:
-        for mention in at_mentions:
-            if mention.lower() in [u.lower() for u in known_usernames]:
-                assignee = mention
-                break
+        assignee = at_mentions[0]  # берём первого упомянутого
     # 2. Дедлайн
     deadline = date_utils.parse_deadline(text)
     # 3. Текст задачи
