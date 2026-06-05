@@ -16,7 +16,6 @@ _CONFIDENCE_THRESHOLD = 50
 
 @router.message(F.text, F.chat.type.in_({"group", "supergroup"}))
 async def handle_text_message(message: Message, bot: Bot) -> None:
-    # Регистрируем автора сообщения
     add_user(
         telegram_id=message.from_user.id,
         username=message.from_user.username,
@@ -28,17 +27,14 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         return
 
     # Определяем ответственного
-    responsible_id = message.from_user.id  # по умолчанию автор
+    responsible_id = message.from_user.id
     assignee_username = parse_result.get("assignee")
     if assignee_username:
-        # Убираем @ в начале, если есть
         clean_username = assignee_username.lstrip('@')
         found_id = get_telegram_id_by_username(clean_username)
         if found_id:
             responsible_id = found_id
             logger.info(f"Назначен ответственный {clean_username} (id={found_id})")
-        else:
-            logger.warning(f"Пользователь @{clean_username} не найден в БД. Задача назначена автору.")
 
     # Создаём задачу в YouGile
     card_id = await create_yougile_task(
@@ -63,20 +59,28 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         chat_id=message.chat.id,
     )
 
-    # Отправляем уведомление ответственному, если это не автор
+    # Уведомление ответственному (если не автор)
     if responsible_id != message.from_user.id:
+        # Кнопки для изменения статуса
+        status_builder = InlineKeyboardBuilder()
+        status_builder.button(text="🟡 Взять в работу", callback_data=f"move_to_do_{task_uuid}")
+        status_builder.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
+        status_builder.button(text="❌ Отменить", callback_data=f"cancel_task_{task_uuid}")
+        status_builder.adjust(2)
+
         try:
             await bot.send_message(
                 responsible_id,
                 f"🔔 Вам назначена задача в группе {message.chat.title}:\n\n"
                 f"📋 {parse_result['task']}\n"
-                f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n"
-                f"🌐 Посмотреть: /tasks"
+                f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n\n"
+                f"Управляйте статусом с помощью кнопок:",
+                reply_markup=status_builder.as_markup()
             )
         except Exception as e:
             logger.error(f"Не удалось отправить уведомление пользователю {responsible_id}: {e}")
 
-    # Кнопка отмены
+    # Кнопка отмены для автора сообщения
     builder = InlineKeyboardBuilder()
     builder.button(text="❌ Отменить задачу", callback_data=f"cancel_task_{task_uuid}")
     builder.adjust(1)
