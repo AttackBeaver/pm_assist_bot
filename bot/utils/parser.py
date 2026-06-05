@@ -110,18 +110,15 @@ _TASK_KEYWORDS = frozenset([
     "воскресенье"
 ])
 
-def parse_task(text: str, known_usernames: list[str]) -> dict[str, Optional[str | int]]:
+def parse_task(text: str, known_usernames: list[str]) -> dict:
     text_lower = text.lower()
-    # 1. Ответственный – только @упоминания
-    assignee = None
-    at_mentions = re.findall(r'@([a-zA-Z0-9_]+)', text)
-    if at_mentions:
-        assignee = at_mentions[0]  # берём первого упомянутого
+    # 1. Находим всех @упомянутых
+    assignees = re.findall(r'@([a-zA-Z0-9_]+)', text)
     # 2. Дедлайн
     deadline = date_utils.parse_deadline(text)
-    # 3. Текст задачи
+    # 3. Текст задачи (удаляем все @упоминания и дедлайн)
     task = text.strip()
-    if assignee:
+    for assignee in assignees:
         task = re.sub(rf'@?{re.escape(assignee)}\b', '', task, flags=re.IGNORECASE)
     if deadline:
         task = re.sub(re.escape(deadline), '', task, flags=re.IGNORECASE)
@@ -129,13 +126,13 @@ def parse_task(text: str, known_usernames: list[str]) -> dict[str, Optional[str 
     if not task:
         task = text.strip()
     # 4. Confidence
-    confidence = _calculate_confidence(task, deadline, assignee, text_lower)
-    if confidence == 0:
-        task = ""
+    confidence = 90 if (assignees and deadline) else 75 if (assignees or deadline) else 50
+    if len(task) < 5:
+        confidence = 0
     return {
         "task": task,
         "deadline": deadline,
-        "assignee": assignee,
+        "assignees": assignees,   # список строк
         "confidence": confidence,
     }
 
