@@ -8,11 +8,12 @@ from bot.utils.audio_utils import download_telegram_audio, transcribe_audio, cle
 from bot.utils.parser import parse_task
 from bot.utils.date_utils import deadline_to_timestamp
 from bot.utils.yougile_utils import create_yougile_task
-from web.database import add_user, add_task
+from web.database import add_user, add_task, get_telegram_id_by_username
 
 logger = logging.getLogger(__name__)
 router = Router()
 _CONFIDENCE_THRESHOLD = 50
+
 
 @router.message(F.voice | F.audio)
 async def handle_voice_message(message: Message, bot: Bot) -> None:
@@ -38,6 +39,16 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
             )
             return
 
+        # Определяем ответственного
+        responsible_id = message.from_user.id
+        assignee_username = parse_result.get("assignee")
+        if assignee_username:
+            clean_username = assignee_username.lstrip('@')
+            found_id = get_telegram_id_by_username(clean_username)
+            if found_id:
+                responsible_id = found_id
+
+        # Создаём задачу в YouGile
         card_id = await create_yougile_task(
             title=parse_result["task"],
             description=transcribed_text,
@@ -47,18 +58,33 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
             await status_msg.edit_text("❌ Не удалось создать задачу в YouGile.")
             return
 
+        # Сохраняем в БД
         task_uuid = str(uuid.uuid4())
         add_task(
             task_id=task_uuid,
             title=parse_result["task"],
             description=transcribed_text,
-            responsible_telegram_id=message.from_user.id,
+            responsible_telegram_id=responsible_id,
             deadline=parse_result["deadline"],
             deadline_timestamp=deadline_to_timestamp(parse_result["deadline"]) if parse_result["deadline"] else None,
             yougile_card_id=card_id,
             chat_id=message.chat.id,
         )
 
+        # Уведомление ответственному
+        if responsible_id != message.from_user.id:
+            try:
+                await bot.send_message(
+                    responsible_id,
+                    f"🔔 Вам назначена задача в группе {message.chat.title} (голосовое сообщение):\n\n"
+                    f"📋 {parse_result['task']}\n"
+                    f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n"
+                    f"🌐 Посмотреть: /tasks"
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отправить уведомление пользователю {responsible_id}: {e}")
+
+        # Кнопка отмены
         builder = InlineKeyboardBuilder()
         builder.button(text="❌ Отменить задачу", callback_data=f"cancel_task_{task_uuid}")
         builder.adjust(1)
@@ -67,7 +93,7 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
             f"✅ Задача автоматически создана в YouGile!\n\n"
             f"📋 {parse_result['task']}\n"
             f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n"
-            f"👤 Ответственный: @{parse_result['assignee'] or 'не назначен'}\n\n"
+            f"👤 Ответственный: @{assignee_username or 'не назначен'}\n\n"
             f"Нажмите «Отменить», если задача создана ошибочно."
         )
         await status_msg.edit_text(reply_text, reply_markup=builder.as_markup())

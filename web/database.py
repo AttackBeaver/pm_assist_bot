@@ -249,3 +249,10 @@ def update_user_stats(telegram_id: int, xp_delta: int = 0, achievements_to_add: 
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (telegram_id, xp_delta, 1 + (xp_delta // 100), json.dumps(achievements), tasks_completed_delta, tasks_created_delta)
             )
+
+def get_telegram_id_by_username(username: str) -> Optional[int]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT telegram_id FROM users WHERE username = ?", (username,)
+        ).fetchone()
+        return row["telegram_id"] if row else None
