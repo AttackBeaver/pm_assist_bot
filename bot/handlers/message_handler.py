@@ -14,8 +14,8 @@ router = Router()
 # Временное хранилище неподтверждённых задач (сбрасывается при перезапуске бота)
 pending_text_tasks: Dict[str, Dict[str, Any]] = {}
 
-_CONFIDENCE_THRESHOLD = 60
-
+# _CONFIDENCE_THRESHOLD = 60
+_CONFIDENCE_THRESHOLD = 30
 
 @router.message(F.text, F.chat.type.in_({"group", "supergroup"}))
 async def handle_text_message(message: Message) -> None:
@@ -27,8 +27,10 @@ async def handle_text_message(message: Message) -> None:
     )
 
     parse_result = parse_task(message.text, known_usernames=[])
+    logger.info(f"Результат парсинга: confidence={parse_result['confidence']}, task={parse_result['task'][:50]}, deadline={parse_result['deadline']}, assignee={parse_result['assignee']}")
 
     if parse_result["confidence"] < _CONFIDENCE_THRESHOLD:
+        logger.info(f"Пропускаем: confidence {parse_result['confidence']} < {_CONFIDENCE_THRESHOLD}")
         return
 
     callback_id = f"text_{message.message_id}"
