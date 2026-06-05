@@ -2,36 +2,126 @@ import re
 from typing import Optional
 from . import date_utils
 
-# Ключевые слова (добавлены «отчет», «презентацию», «макет», «сводку»)
 _TASK_KEYWORDS = frozenset([
-    "сделать", "сделай", "задача", "нужно", "дедлайн",
-    "до", "к", "выполнить", "подготовить", "подготовь",
-    "проверить", "проверь", "отправить", "отправь",
-    "обновить", "обнови", "написать", "напиши", "создать", "создай",
-    "отчет", "презентацию", "макет", "сводку",
-    "реализовать", "организовать", "проведи"
-])
+    # Общие маркеры
+    "задача", "задачи", "таск", "task", "поручение",
+    "дедлайн", "срок", "крайний", "план", "планируется",
 
+    # Необходимость
+    "нужно", "надо", "необходимо", "следует",
+    "требуется", "обязательно", "желательно",
+    "нужен", "нужна", "нужно", "нужны",
+
+    # Создание
+    "сделать", "сделай", "создать", "создай",
+    "разработать", "разработай",
+    "реализовать", "реализуй",
+    "написать", "напиши",
+    "подготовить", "подготовь",
+    "сформировать", "сформируй",
+    "составить", "составь",
+    "собрать", "собери",
+    "оформить", "оформи",
+    "заполнить", "заполни",
+
+    # Изменение
+    "обновить", "обнови",
+    "исправить", "исправь",
+    "доработать", "доработай",
+    "переработать", "переработай",
+    "изменить", "измени",
+    "добавить", "добавь",
+    "удалить", "удали",
+    "оптимизировать", "оптимизируй",
+    "улучшить", "улучши",
+    "обновление",
+
+    # Проверка
+    "проверить", "проверь",
+    "протестировать", "протестируй",
+    "отладить", "отладь",
+    "проанализировать", "проанализируй",
+    "ревью", "review",
+    "проверка", "тестирование",
+
+    # Документы
+    "отчет", "отчёт",
+    "презентация", "презентацию",
+    "документ", "документация",
+    "спецификация", "тз",
+    "сводка", "макет",
+    "схема", "инструкция",
+
+    # Коммуникации
+    "отправить", "отправь",
+    "выслать", "вышли",
+    "согласовать", "согласуй",
+    "обсудить", "обсуди",
+    "созвониться", "созвон",
+    "встретиться", "встреча",
+    "уведомить", "сообщить",
+
+    # Организация
+    "организовать", "организуй",
+    "провести", "проведи",
+    "назначить", "назначь",
+    "забронировать", "забронируй",
+    "подготовка",
+
+    # Покупки и ресурсы
+    "купить", "заказать",
+    "закупить", "приобрести",
+
+    # Разработка
+    "фича", "feature",
+    "баг", "bug",
+    "фикс", "fix",
+    "рефакторинг",
+    "деплой", "deploy",
+    "релиз", "release",
+    "миграция",
+    "интеграция",
+
+    # Канбан-маркеры
+    "в работу",
+    "выполнить", "выполни",
+    "завершить", "заверши",
+    "закрыть", "закрой",
+    "взять",
+    "перенести",
+    "приоритет",
+
+    # Напоминания
+    "не забудь",
+    "напомни",
+    "помни",
+
+    # Временные маркеры
+    "до",
+    "к",
+    "сегодня",
+    "завтра",
+    "понедельник",
+    "вторник",
+    "среда",
+    "четверг",
+    "пятница",
+    "суббота",
+    "воскресенье"
+])
 
 def parse_task(text: str, known_usernames: list[str]) -> dict[str, Optional[str | int]]:
     text_lower = text.lower()
-    known_lower = [u.lower() for u in known_usernames]
-
-    # 1. Ответственный
+    # 1. Ответственный – только @упоминания, и только если username есть в known_usernames
     assignee = None
-    for mention in re.findall(r'@([a-zA-Z0-9_]+)', text):
-        if mention.lower() in known_lower:
-            assignee = mention
-            break
-    if not assignee:
-        for username in known_usernames:
-            if re.search(rf'\b{re.escape(username)}\b', text_lower):
-                assignee = username
+    at_mentions = re.findall(r'@([a-zA-Z0-9_]+)', text)
+    if at_mentions:
+        for mention in at_mentions:
+            if mention.lower() in [u.lower() for u in known_usernames]:
+                assignee = mention
                 break
-
     # 2. Дедлайн
     deadline = date_utils.parse_deadline(text)
-
     # 3. Текст задачи
     task = text.strip()
     if assignee:
@@ -41,20 +131,16 @@ def parse_task(text: str, known_usernames: list[str]) -> dict[str, Optional[str 
     task = re.sub(r'\s+', ' ', task).strip(' ,.-:')
     if not task:
         task = text.strip()
-
+    # 4. Confidence
     confidence = _calculate_confidence(task, deadline, assignee, text_lower)
-    
-    # Если уверенность нулевая, очищаем задачу (чтобы тесты не падали)
     if confidence == 0:
         task = ""
-
     return {
         "task": task,
         "deadline": deadline,
         "assignee": assignee,
         "confidence": confidence,
     }
-    
 
 def _calculate_confidence(task: str, deadline: Optional[str], assignee: Optional[str], text_lower: str) -> int:
     has_task = len(task) > 5
@@ -62,12 +148,15 @@ def _calculate_confidence(task: str, deadline: Optional[str], assignee: Optional
     has_assignee = assignee is not None
     has_keyword = any(re.search(rf'\b{kw}\b', text_lower) for kw in _TASK_KEYWORDS)
 
-    if not has_keyword:
-        # Без ключевых слов задача признаётся только если есть и дедлайн, и ответственный
-        if has_deadline and has_assignee:
-            return 60
+    # Если нет ключевых слов и нет дедлайна и нет ответственного – уверенность 0
+    if not has_keyword and not has_deadline and not has_assignee:
         return 0
-
+    # Если сообщение очень короткое (3 слова или меньше) и нет дедлайна/ответственного – 0
+    if len(text_lower.split()) <= 3 and not has_deadline and not has_assignee:
+        return 0
+    # Если есть ключевое слово, но задача не выделена
+    if has_keyword and not has_task:
+        return 30
     if has_task and has_deadline and has_assignee:
         return 90
     if has_task and (has_deadline or has_assignee):
