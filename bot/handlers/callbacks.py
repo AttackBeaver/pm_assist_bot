@@ -25,6 +25,7 @@ async def cancel_task_callback(callback: CallbackQuery):
             delete_task(task_uuid)
             await callback.message.edit_text("❌ Задача удалена из YouGile и из вашего списка.")
         else:
+            # Если YouGile не удалилось, всё равно удаляем локально
             delete_task(task_uuid)
             await callback.message.edit_text("⚠️ Не удалось удалить задачу в YouGile, но она удалена из локального списка.")
     else:

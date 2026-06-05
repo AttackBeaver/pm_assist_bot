@@ -110,13 +110,28 @@ _TASK_KEYWORDS = frozenset([
     "воскресенье"
 ])
 
-def parse_task(text: str, known_usernames: list[str]) -> dict[str, Optional[str | int]]:
+def parse_task(text: str, known_usernames: list[str]) -> dict:
     text_lower = text.lower()
-    # 1. Ответственный – если есть @username, назначаем его (даже если нет в known_usernames)
     assignee = None
+
+    # 1) Поиск @username
     at_mentions = re.findall(r'@([a-zA-Z0-9_]+)', text)
     if at_mentions:
-        assignee = at_mentions[0]  # берём первого упомянутого
+        assignee = at_mentions[0]
+    else:
+        # 2) Поиск имени с заглавной буквы в начале строки (до запятой, точки или пробела)
+        # Пример: "Антон, сделай отчёт" -> "Антон"
+        match = re.match(r'^([А-ЯA-Z][а-яa-z]+(?:[-\s][А-ЯA-Z][а-яa-z]+)?)\s*[,.:]?\s+', text)
+        if match:
+            potential_name = match.group(1)
+            # Дополнительно проверим, что имя не слишком короткое и не похоже на команду
+            if len(potential_name) >= 2 and not potential_name.lower() in ['я', 'ты', 'он', 'она', 'оно']:
+                assignee = potential_name
+        else:
+            # 3) Поиск email (как вариант, но вряд ли это ответственный)
+            email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
+            if email_match:
+                assignee = email_match.group(0)  # сохраняем email как строку
     # 2. Дедлайн
     deadline = date_utils.parse_deadline(text)
     # 3. Текст задачи
