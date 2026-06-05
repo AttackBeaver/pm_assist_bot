@@ -22,5 +22,10 @@ if not YOUGILE_TOKEN:
 if not YOUGILE_BOARD_ID:
     logger.warning("YOUGILE_BOARD_ID не задан — создание задач в YouGile недоступно")
 
-# URL веб-кабинета (можно переопределить в .env для продакшена)
+# ID колонок YouGile (можно задать в .env)
+YOUGILE_TO_COLUMN_ID: str | None = os.getenv("YOUGILE_TO_COLUMN_ID")      # колонка "Сделать"
+YOUGILE_DO_COLUMN_ID: str | None = os.getenv("YOUGILE_DO_COLUMN_ID")      # колонка "В процессе"
+YOUGILE_DONE_COLUMN_ID: str | None = os.getenv("YOUGILE_DONE_COLUMN_ID")  # колонка "Готово"
+
+# URL веб-кабинета
 WEB_BASE_URL: str = os.getenv("WEB_BASE_URL", "http://localhost:8000")

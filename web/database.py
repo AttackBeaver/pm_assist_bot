@@ -1,6 +1,6 @@
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
@@ -11,28 +11,34 @@ def init_db() -> None:
     """Создаёт таблицы задач и пользователей, если их нет."""
     with _connect() as conn:
         conn.executescript('''
-            CREATE TABLE IF NOT EXISTS tasks (
-                id                      TEXT    PRIMARY KEY,
-                title                   TEXT    NOT NULL,
-                description             TEXT,
-                status                  TEXT    DEFAULT 'pending',
-                deadline                TEXT,
-                deadline_timestamp      INTEGER,
-                responsible_telegram_id INTEGER,
-                yougile_card_id         TEXT,
-                chat_id                 INTEGER,
-                created_at              TEXT
-            );
-            CREATE TABLE IF NOT EXISTS users (
-                telegram_id INTEGER PRIMARY KEY,
-                username    TEXT,
-                full_name   TEXT,
-                is_away     INTEGER DEFAULT 0,
-                away_reason TEXT,
-                away_until  TEXT
-            );
+        CREATE TABLE IF NOT EXISTS tasks (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT,
+            status TEXT DEFAULT 'pending',
+            deadline TEXT,
+            deadline_timestamp INTEGER,
+            responsible_telegram_id INTEGER,
+            yougile_card_id TEXT,
+            chat_id INTEGER,
+            created_at TEXT,
+            completed_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS users (
+            telegram_id INTEGER PRIMARY KEY,
+            username TEXT,
+            full_name TEXT,
+            is_away INTEGER DEFAULT 0,
+            away_reason TEXT,
+            away_until TEXT
+        );
         ''')
-
+        
+        # Миграция: добавляем completed_at, если её нет (для существующих БД)
+        try:
+            conn.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT")
+        except sqlite3.OperationalError:
+            pass  # Колонка уже существует
 
 @contextmanager
 def _connect() -> Generator[sqlite3.Connection, None, None]:
@@ -161,6 +167,14 @@ def get_tasks_by_user(
             ).fetchall()
     return [dict(row) for row in rows]
 
+def get_task_by_id(task_id: str) -> Optional[Dict[str, Any]]:
+    """Возвращает задачу по ID или None."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
 
 def get_all_active_tasks() -> List[Dict[str, Any]]:
     """Возвращает все активные задачи с дедлайном (для планировщика напоминаний)."""
@@ -186,12 +200,66 @@ def get_tasks_with_upcoming_deadline(hours_before: int = 2) -> List[Dict[str, An
 
 
 def complete_task(task_id: str) -> None:
-    """Помечает задачу как выполненную."""
+    """Помечает задачу как выполненную и записывает время завершения."""
     with _connect() as conn:
-        conn.execute("UPDATE tasks SET status = 'completed' WHERE id = ?", (task_id,))
+        conn.execute(
+            "UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?",
+            (datetime.now().isoformat(), task_id),
+        )
 
 
 def delete_task(task_id: str) -> None:
     """Удаляет задачу из БД."""
     with _connect() as conn:
         conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+
+
+
+
+
+def get_average_completion_time() -> Optional[float]:
+    """Возвращает среднее время выполнения задач в часах или None."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT created_at, completed_at
+            FROM tasks
+            WHERE status = 'completed' AND completed_at IS NOT NULL AND created_at IS NOT NULL
+            """
+        ).fetchall()
+        
+        if not rows:
+            return None
+        
+        total_hours = 0.0
+        count = 0
+        for row in rows:
+            try:
+                created = datetime.fromisoformat(row["created_at"])
+                completed = datetime.fromisoformat(row["completed_at"])
+                hours = (completed - created).total_seconds() / 3600
+                if hours > 0:  # Игнорируем отрицательные значения
+                    total_hours += hours
+                    count += 1
+            except (ValueError, TypeError):
+                continue
+        
+        return total_hours / count if count > 0 else None
+    
+
+    from datetime import timedelta
+
+def get_stale_tasks(days_old: int = 3) -> List[Dict[str, Any]]:
+    """Возвращает задачи, которые находятся в статусе pending дольше days_old дней."""
+    threshold = (datetime.now() - timedelta(days=days_old)).isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, title, responsible_telegram_id, created_at
+            FROM tasks
+            WHERE status = 'pending' AND created_at < ?
+            """,
+            (threshold,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+        

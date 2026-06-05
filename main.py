@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher
 
 from config import BOT_TOKEN
 from bot.handlers import user_commands, message_handler, voice_handler, callbacks
-from bot.tasks.scheduler import reminder_worker, evening_digest_worker
+from bot.tasks.scheduler import reminder_worker, evening_digest_worker, stale_task_reminder_worker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,6 +27,7 @@ async def main() -> None:
     async with asyncio.TaskGroup() as tg:
         tg.create_task(reminder_worker(bot))
         tg.create_task(evening_digest_worker(bot))
+        tg.create_task(stale_task_reminder_worker(bot))   # <-- добавлено
         tg.create_task(dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types()))
 
 

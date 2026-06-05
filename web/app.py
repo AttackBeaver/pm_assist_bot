@@ -2,8 +2,9 @@
 import sys
 from html import escape
 
-from fastapi import FastAPI, Form
+from fastapi import FastAPI, Form, logger
 from fastapi.responses import HTMLResponse, RedirectResponse
+from config import YOUGILE_TOKEN, YOUGILE_DONE_COLUMN_ID, YOUGILE_BOARD_ID
 
 # При запуске напрямую (python web/app.py) корень проекта не в sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -182,10 +183,39 @@ async def cabinet(telegram_id: int) -> HTMLResponse:
 
 @app.post("/task/{task_id}/complete")
 async def task_complete(task_id: str, telegram_id: int = Form(...)) -> RedirectResponse:
+    from web.database import get_task_by_id
+    from yougile_client import YouGileClient
+    from config import YOUGILE_TOKEN, YOUGILE_DONE_COLUMN_ID, YOUGILE_BOARD_ID
+    
+    # Получаем задачу из БД
+    task = get_task_by_id(task_id)
+    
+    # Пытаемся синхронизировать с YouGile
+    if task and task.get("yougile_card_id") and YOUGILE_TOKEN:
+        try:
+            client = YouGileClient(YOUGILE_TOKEN)
+            
+            # Получаем ID колонки "Готово"
+            done_column_id = YOUGILE_DONE_COLUMN_ID
+            if not done_column_id and YOUGILE_BOARD_ID:
+                # Динамически ищем колонку "Готово"
+                done_column_id = client.get_column_id_by_title(YOUGILE_BOARD_ID, "Готово")
+            
+            if done_column_id:
+                success = client.move_task(task["yougile_card_id"], done_column_id)
+                if not success:
+                    logger.warning(f"Не удалось переместить задачу {task_id} в YouGile")
+            else:
+                logger.warning("Не найден ID колонки 'Готово' в YouGile")
+                
+        except Exception as e:
+            logger.error(f"Ошибка синхронизации с YouGile: {e}")
+            # Продолжаем — локальное обновление всё равно произойдёт
+    
+    # Обновляем статус в локальной БД (всегда, даже если YouGile недоступен)
     complete_task(task_id)
+    
     return RedirectResponse(url=f"/cabinet/{telegram_id}", status_code=303)
-
-
 @app.post("/task/{task_id}/delete")
 async def task_delete(task_id: str, telegram_id: int = Form(...)) -> RedirectResponse:
     delete_task(task_id)
@@ -202,3 +232,27 @@ if __name__ == "__main__":
     print("🚀 Запуск личного кабинета PM Assist")
     print("📱 Откройте в браузере: http://localhost:8000/cabinet/YOUR_TELEGRAM_ID")
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+@app.get("/cabinet/{telegram_id}", response_class=HTMLResponse)
+async def cabinet(telegram_id: int) -> HTMLResponse:
+    from web.database import get_average_completion_time
+    
+    tasks = get_tasks_by_user(telegram_id)
+    total = len(tasks)
+    completed = sum(1 for t in tasks if t["status"] == "completed")
+    pending = total - completed
+    
+    avg_time = get_average_completion_time()
+    avg_time_str = f"{avg_time:.1f} ч" if avg_time else "—"
+    
+    return HTMLResponse(
+        _HTML_TEMPLATE.format(
+            telegram_id=telegram_id,
+            total=total,
+            pending=pending,
+            completed=completed,
+            avg_time=avg_time_str,
+            tasks_table=_build_tasks_table(tasks, telegram_id),
+        )
+    )

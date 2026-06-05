@@ -14,7 +14,7 @@ router = Router()
 # Временное хранилище неподтверждённых задач (сбрасывается при перезапуске бота)
 pending_text_tasks: Dict[str, Dict[str, Any]] = {}
 
-_CONFIDENCE_THRESHOLD = 50
+_CONFIDENCE_THRESHOLD = 60
 
 
 @router.message(F.text, F.chat.type.in_({"group", "supergroup"}))

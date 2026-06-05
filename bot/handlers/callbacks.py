@@ -6,7 +6,7 @@ from aiogram import Router
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from yougile_client import YouGileClient
-from config import YOUGILE_TOKEN, YOUGILE_BOARD_ID, WEB_BASE_URL
+from config import YOUGILE_TOKEN, YOUGILE_BOARD_ID, YOUGILE_TO_COLUMN_ID, WEB_BASE_URL
 from bot.utils.date_utils import deadline_to_timestamp
 from web.database import add_task
 from bot.handlers.message_handler import pending_text_tasks
@@ -27,22 +27,22 @@ def _cabinet_button(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
         )
     ]])
 
-async def _create_yougile_task(    title: str,
-    description: str,
-    deadline_str: Optional[str] = None,
-) -> Optional[str]:
-    """Создаёт задачу в первой колонке доски YouGile. Возвращает ID карточки или None."""
+async def _create_yougile_task(title, description, deadline_str=None):
     if not YOUGILE_TOKEN or not YOUGILE_BOARD_ID:
-        logger.error("YouGile не настроен: отсутствует YOUGILE_TOKEN или YOUGILE_BOARD_ID")
+        logger.error("YouGile не настроен")
         return None
 
     client = YouGileClient(YOUGILE_TOKEN)
-    columns = client.get_columns(YOUGILE_BOARD_ID)
-    if not columns:
-        logger.error("Не удалось получить колонки YouGile")
-        return None
-
-    column_id: str = columns[0]["id"]
+    
+    # Используем ID колонки "Сделать" из .env
+    column_id = YOUGILE_TO_COLUMN_ID
+    if not column_id:
+        # fallback: первая колонка
+        columns = client.get_columns(YOUGILE_BOARD_ID)
+        if not columns:
+            return None
+        column_id = columns[0]["id"]
+    
     deadline_ts = deadline_to_timestamp(deadline_str) if deadline_str else None
     result = client.create_task(title, column_id, description, deadline_timestamp=deadline_ts)
     return result.get("id") if result else None
