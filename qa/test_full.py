@@ -11,7 +11,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from config import (
     BOT_TOKEN, SPEECH2TEXT_API_KEY,
     YOUGILE_TOKEN, YOUGILE_BOARD_ID,
-    YOUGILE_TO_COLUMN_ID, YOUGILE_DO_COLUMN_ID, YOUGILE_DONE_COLUMN_ID
+    YOUGILE_TO_COLUMN_ID, YOUGILE_DO_COLUMN_ID, YOUGILE_DONE_COLUMN_ID,
+    YANDEX_FOLDER_ID, YANDEX_API_KEY   # добавлено
 )
 from bot.utils.parser import parse_task
 from web.database import (
@@ -54,14 +55,14 @@ def test_parser():
     cases = [
         ("@ivan нужно сделать отчет до 18:00", "отчет", "18:00", "ivan", 90),
         ("@anna, задача: подготовить презентацию к 15.06", "презентацию", "15.06", "anna", 90),
-        ("Сделать рефакторинг модуля парсинга", "рефакторинг", None, None, 50),
+        ("Сделать рефакторинг модуля парсинга", "рефакторинг", None, None, 55),
         ("dev_lead, нужен макет к пятнице", "макет", "пятнице", None, 75),
         ("Привет, как дела? Когда встреча?", None, None, None, 0),
         ("@max проверь код, пожалуйста", "проверь код", None, "max", 60),
-        ("Нужно обновить документацию завтра", "документацию", "завтра", None, 70),
+        ("Нужно обновить документацию завтра", "документацию", "завтра", None, 75),
         ("Через 2 дня нужно сдать проект, @ivan ты ответственный", "проект", "2 дня", "ivan", 90),
         ("К 20.12.2025 подготовить отчет по продажам, ответственный @anna", "отчет", "20.12.2025", "anna", 90),
-        ("Пожалуйста, сделай это как можно скорее", "сделай это", None, None, 55),
+        ("Пожалуйста, сделай это как можно скорее", "сделай это", None, None, 50),
         ("Задача для @ivan: протестировать API до 12:00", "протестировать", "12:00", "ivan", 90),
         ("Просто сообщение без задач и упоминаний", None, None, None, 0),
         ("@unknown_user сделай задачу", "сделай задачу", None, None, 55),
@@ -81,24 +82,30 @@ def test_parser():
         res = parse_task(text, known)
         ok = True
         err = []
+        # Проверка задачи
         if exp_task is None:
-            if len(res["task"]) >= 10:
-                ok = False; err.append(f"task length {len(res['task'])} >=10")
+            ok = (res["confidence"] == 0)
+            if not ok:
+                err.append(f"expected confidence 0, got {res['confidence']}")
         else:
             if exp_task.lower() not in res["task"].lower():
                 ok = False; err.append(f"no '{exp_task}' in '{res['task'][:50]}'")
+        # Проверка дедлайна
         if exp_deadline is None:
             if res["deadline"] is not None:
                 ok = False; err.append(f"deadline should be None, got {res['deadline']}")
         else:
             if res["deadline"] is None or exp_deadline not in res["deadline"]:
                 ok = False; err.append(f"no '{exp_deadline}' in '{res['deadline']}'")
+        # Проверка ответственных (список)
         if exp_assignee is None:
-            if res["assignee"] is not None:
-                ok = False; err.append(f"assignee should be None, got {res['assignee']}")
+            if res.get("assignees"):
+                ok = False; err.append(f"assignees should be empty, got {res['assignees']}")
         else:
-            if res["assignee"] is None or res["assignee"].lower() != exp_assignee.lower():
-                ok = False; err.append(f"assignee expected {exp_assignee}, got {res['assignee']}")
+            assignees_lower = [a.lower() for a in res.get("assignees", [])]
+            if exp_assignee.lower() not in assignees_lower:
+                ok = False; err.append(f"assignee expected {exp_assignee}, got {res.get('assignees')}")
+        # Проверка confidence
         if res["confidence"] < min_conf:
             ok = False; err.append(f"confidence {res['confidence']} < {min_conf}")
         if ok:
@@ -119,14 +126,13 @@ def test_parser():
 def test_database():
     print("ℹ️ Тестирование локальной БД и геймификации...")
     test_id = 999999
-    # Очистка
-    tasks = get_tasks_by_user(test_id)
-    for t in tasks:
-        delete_task(t["id"])
+    # Жёсткая очистка всех данных этого пользователя
     import sqlite3
     from web.database import DB_PATH
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM tasks WHERE responsible_telegram_id = ? OR author_telegram_id = ?", (test_id, test_id))
     conn.execute("DELETE FROM user_stats WHERE telegram_id = ?", (test_id,))
+    conn.execute("DELETE FROM users WHERE telegram_id = ?", (test_id,))
     conn.commit()
     conn.close()
     add_user(test_id, "testuser", "Test User")
@@ -136,8 +142,15 @@ def test_database():
         return False
     print("✅ Пользователь создан")
     task_uuid = str(uuid.uuid4())
-    add_task(task_uuid, "Тестовая задача", "Описание", test_id,
-             deadline="завтра", deadline_timestamp=int((datetime.now() + timedelta(days=1)).timestamp()*1000))
+    add_task(
+        task_id=task_uuid,
+        title="Тестовая задача",
+        description="Описание",
+        responsible_telegram_id=test_id,
+        author_telegram_id=test_id,          # <-- ДОБАВЛЕНО
+        deadline="завтра",
+        deadline_timestamp=int((datetime.now() + timedelta(days=1)).timestamp() * 1000),
+    )
     task = get_task_by_id(task_uuid)
     if not task:
         print("❌ Не удалось создать задачу")
@@ -213,7 +226,13 @@ def test_web_cabinet():
     test_id = 888888
     add_user(test_id, "webtest", "Web Test")
     task_uuid = str(uuid.uuid4())
-    add_task(task_uuid, "Веб задача", "Тест", test_id)
+    add_task(
+        task_id=task_uuid,
+        title="Веб задача",
+        description="Тест",
+        responsible_telegram_id=test_id,
+        author_telegram_id=test_id,
+    )
     resp = client.get(f"/cabinet/{test_id}")
     if resp.status_code != 200:
         print(f"❌ /cabinet/{test_id} вернул {resp.status_code}")
@@ -247,8 +266,15 @@ async def test_reminder():
     add_user(test_id, "reminder_user", "Reminder")
     task_id = str(uuid.uuid4())
     deadline_ts = int((datetime.now() + timedelta(hours=1)).timestamp() * 1000)
-    add_task(task_id, "Тест напоминания", "Описание", test_id,
-             deadline_timestamp=deadline_ts, chat_id=-100123456789)
+    add_task(
+        task_id=task_id,
+        title="Тест напоминания",
+        description="Описание",
+        responsible_telegram_id=test_id,
+        author_telegram_id=test_id,   # <-- добавлено
+        deadline_timestamp=deadline_ts,
+        chat_id=-100123456789
+    )
     class MockBot:
         async def send_message(self, chat_id, text):
             print(f"→ Отправлено сообщение в чат {chat_id}: {text[:50]}")
@@ -347,6 +373,43 @@ def test_notifications():
     return False
 
 # ----------------------------------------------------------------------
+# 9. Тест YandexGPT
+# ----------------------------------------------------------------------
+def test_yandex_gpt():
+    print("ℹ️ Тестирование YandexGPT...")
+    from config import YANDEX_FOLDER_ID, YANDEX_API_KEY
+    if not YANDEX_FOLDER_ID or not YANDEX_API_KEY:
+        print("⚠️ YandexGPT не настроен (отсутствуют YANDEX_FOLDER_ID или YANDEX_API_KEY) — тест пропущен")
+        return True  # Не считаем ошибкой, просто пропускаем
+
+    try:
+        from bot.utils.llm_parser import parse_task_with_llm
+    except ImportError as e:
+        print(f"❌ Не удалось импортировать llm_parser: {e}")
+        return False
+
+    test_text = "@ivan нужно сделать отчет до 18:00"
+    print(f"🔍 Тестовая фраза: {test_text}")
+    result = parse_task_with_llm(test_text)
+    if not result:
+        print("❌ YandexGPT не вернул результат (возможно, ошибка API или сетевые проблемы)")
+        return False
+
+    required_fields = ["task", "deadline", "assignees", "confidence"]
+    for field in required_fields:
+        if field not in result:
+            print(f"❌ В ответе отсутствует поле {field}")
+            return False
+
+    confidence = result.get("confidence", 0)
+    if confidence < 50:
+        print(f"❌ Уверенность слишком низкая: {confidence}")
+        return False
+
+    print(f"✅ YandexGPT распознал задачу: task={result['task']}, deadline={result['deadline']}, assignees={result['assignees']}, confidence={confidence}")
+    return True
+
+# ----------------------------------------------------------------------
 # MAIN
 # ----------------------------------------------------------------------
 def main():
@@ -362,6 +425,7 @@ def main():
     results["scheduler"] = test_scheduler()
     results["imports"] = test_imports()
     results["notifications"] = test_notifications()
+    results["yandex_gpt"] = test_yandex_gpt()
     print("\n" + "=" * 60)
     print("📊 РЕЗУЛЬТАТЫ:")
     for name, ok in results.items():

@@ -29,3 +29,12 @@ YOUGILE_DONE_COLUMN_ID: str | None = os.getenv("YOUGILE_DONE_COLUMN_ID")  # ко
 
 # URL веб-кабинета
 WEB_BASE_URL: str = os.getenv("WEB_BASE_URL", "http://localhost:8000")
+
+# YandexGPT
+YANDEX_FOLDER_ID: str | None = os.getenv("YANDEX_FOLDER_ID")
+YANDEX_API_KEY: str | None = os.getenv("YANDEX_API_KEY")
+
+if YANDEX_FOLDER_ID and YANDEX_API_KEY:
+    logger.info("✅ YandexGPT настроен — будет использоваться для распознавания задач")
+else:
+    logger.warning("⚠️ YandexGPT не настроен — используется только regex‑парсер")

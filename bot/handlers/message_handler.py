@@ -4,7 +4,8 @@ from aiogram import Router, F, Bot
 from aiogram.types import Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.utils.parser import parse_task
+from bot.utils.parser import parse_task as regex_parse_task
+from bot.utils.llm_parser import parse_task_with_llm
 from bot.utils.date_utils import deadline_to_timestamp
 from bot.utils.yougile_utils import create_yougile_task
 from web.database import add_user, add_task, get_telegram_id_by_username
@@ -12,6 +13,7 @@ from web.database import add_user, add_task, get_telegram_id_by_username
 logger = logging.getLogger(__name__)
 router = Router()
 _CONFIDENCE_THRESHOLD = 50
+
 
 async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | None:
     clean = username.lstrip('@')
@@ -28,12 +30,23 @@ async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | Non
         pass
     return None
 
+
 @router.message(F.text, F.chat.type.in_({"group", "supergroup"}))
 async def handle_text_message(message: Message, bot: Bot) -> None:
     # Регистрируем автора
     add_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
 
-    parse_result = parse_task(message.text, known_usernames=[])
+    # ----- ГИБРИДНЫЙ ПАРСИНГ -----
+    # 1) Пытаемся использовать YandexGPT
+    llm_result = parse_task_with_llm(message.text)
+    if llm_result and llm_result.get("confidence", 0) >= _CONFIDENCE_THRESHOLD:
+        parse_result = llm_result
+        logger.info(f"✅ Распознано через LLM: confidence={parse_result['confidence']}")
+    else:
+        # 2) Fallback на regex-парсер
+        parse_result = regex_parse_task(message.text, known_usernames=[])
+        logger.info(f"🔄 Fallback на regex: confidence={parse_result['confidence']}")
+
     if parse_result["confidence"] < _CONFIDENCE_THRESHOLD:
         return
 
@@ -74,7 +87,6 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
         # --- Отправка личных уведомлений ---
         if responsible_id == author_id:
-            # Автор получает полный набор кнопок (удалить, взять, завершить)
             keyboard = InlineKeyboardBuilder()
             keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
             keyboard.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
@@ -93,7 +105,6 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
             except Exception as e:
                 logger.error(f"Не удалось отправить уведомление автору {author_id}: {e}")
         else:
-            # Ответственному – только кнопки работы (без удаления)
             keyboard_worker = InlineKeyboardBuilder()
             keyboard_worker.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
             keyboard_worker.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
@@ -110,7 +121,6 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
             except Exception as e:
                 logger.error(f"Не удалось отправить уведомление ответственному {responsible_id}: {e}")
 
-            # Автору – только кнопка удаления
             keyboard_author = InlineKeyboardBuilder()
             keyboard_author.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
             keyboard_author.adjust(1)

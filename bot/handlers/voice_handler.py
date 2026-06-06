@@ -5,7 +5,8 @@ from aiogram.types import Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.utils.audio_utils import download_telegram_audio, transcribe_audio, cleanup_temp_file
-from bot.utils.parser import parse_task
+from bot.utils.parser import parse_task as regex_parse_task
+from bot.utils.llm_parser import parse_task_with_llm
 from bot.utils.date_utils import deadline_to_timestamp
 from bot.utils.yougile_utils import create_yougile_task
 from web.database import add_user, add_task, get_telegram_id_by_username
@@ -13,6 +14,7 @@ from web.database import add_user, add_task, get_telegram_id_by_username
 logger = logging.getLogger(__name__)
 router = Router()
 _CONFIDENCE_THRESHOLD = 50
+
 
 async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | None:
     clean = username.lstrip('@')
@@ -29,6 +31,7 @@ async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | Non
         pass
     return None
 
+
 @router.message(F.voice | F.audio)
 async def handle_voice_message(message: Message, bot: Bot) -> None:
     add_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
@@ -42,7 +45,15 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
             await status_msg.edit_text("❌ Не удалось распознать речь.")
             return
 
-        parse_result = parse_task(transcribed_text, known_usernames=[])
+        # ----- ГИБРИДНЫЙ ПАРСИНГ -----
+        llm_result = parse_task_with_llm(transcribed_text)
+        if llm_result and llm_result.get("confidence", 0) >= _CONFIDENCE_THRESHOLD:
+            parse_result = llm_result
+            logger.info(f"✅ Распознано через LLM: confidence={parse_result['confidence']}")
+        else:
+            parse_result = regex_parse_task(transcribed_text, known_usernames=[])
+            logger.info(f"🔄 Fallback на regex: confidence={parse_result['confidence']}")
+
         if parse_result["confidence"] < _CONFIDENCE_THRESHOLD:
             await status_msg.edit_text(f"🔊 Я услышал:\n{transcribed_text}\n\nНе уверен, что это задача.")
             return
@@ -132,7 +143,7 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
                 except Exception as e:
                     logger.error(f"Не удалось отправить уведомление автору {author_id}: {e}")
 
-        # Ответ в группе без кнопок
+        # Ответ в группе
         reply_text = (
             f"✅ Задача автоматически создана в YouGile!\n\n"
             f"📋 {parse_result['task']}\n"
