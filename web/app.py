@@ -225,6 +225,10 @@ async def task_delete(task_id: str, telegram_id: int = Form(...)) -> RedirectRes
 async def health() -> dict:
     return {"status": "ok", "message": "PM Assist работает"}
 
+@app.get("/ping")
+async def ping():
+    return {"status": "ok", "message": "PM Assist web is alive"}
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
