@@ -13,39 +13,6 @@ logger = logging.getLogger(__name__)
 
 _STT_TIMEOUT = 300  # секунд (можно увеличить до 600 для длинных встреч)
 
-
-async def download_telegram_media(message: Message, bot: Bot) -> str:
-    """
-    Скачивает голосовое/аудио/видео сообщение из Telegram во временный файл.
-    Возвращает путь к файлу.
-    """
-    file_obj = message.voice or message.audio or message.video
-    if not file_obj:
-        raise ValueError("В сообщении нет голосового, аудио или видео файла")
-
-    file_info = await bot.get_file(file_obj.file_id)
-
-    # Определяем расширение
-    if message.voice:
-        ext = "ogg"
-    elif message.audio:
-        original_name = getattr(file_obj, "file_name", "") or ""
-        ext = original_name.rsplit(".", 1)[-1] if "." in original_name else "mp3"
-    elif message.video:
-        original_name = getattr(file_obj, "file_name", "") or ""
-        ext = original_name.rsplit(".", 1)[-1] if "." in original_name else "mp4"
-    else:
-        ext = "bin"
-
-    temp_path = os.path.join(tempfile.gettempdir(), f"tg_media_{message.message_id}.{ext}")
-    file_bytes_io = await bot.download_file(file_info.file_path)
-    with open(temp_path, "wb") as f:
-        f.write(file_bytes_io.getvalue())
-
-    logger.info(f"Медиа сохранено: {temp_path}")
-    return temp_path
-
-
 def extract_audio_from_video(video_path: str, output_audio_path: str) -> bool:
     """Извлекает аудио из видеофайла с помощью ffmpeg."""
     try:
