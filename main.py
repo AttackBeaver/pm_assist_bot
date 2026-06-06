@@ -1,12 +1,12 @@
 import asyncio
 import logging
 import os
-from threading import Thread
 from aiogram import Bot, Dispatcher
-
 from config import BOT_TOKEN
 from bot.handlers import user_commands, message_handler, voice_handler, callbacks
 from bot.tasks.scheduler import reminder_worker, evening_digest_worker, stale_task_reminder_worker
+import uvicorn
+from web.app import app
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,12 +15,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-def run_web():
-    import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run("web.app:app", host="0.0.0.0", port=port, log_level="info")
-
+async def run_web():
+    """Запускает веб-кабинет (FastAPI) асинхронно."""
+    config = uvicorn.Config(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)), log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
 
 async def main() -> None:
     bot = Bot(token=BOT_TOKEN)
@@ -30,18 +29,16 @@ async def main() -> None:
     dp.include_router(message_handler.router)
     dp.include_router(voice_handler.router)
     dp.include_router(callbacks.router)
-
     logger.info("Запуск PM-Assist Bot...")
 
-    # Запуск веб-сервера в отдельном потоке
-    Thread(target=run_web, daemon=True).start()
-
-    async with asyncio.TaskGroup() as tg:
-        tg.create_task(reminder_worker(bot))
-        tg.create_task(evening_digest_worker(bot))
-        tg.create_task(stale_task_reminder_worker(bot))
-        tg.create_task(dp.start_polling(bot, allowed_updates=['message', 'callback_query', 'my_chat_member']))
-
+    # Запускаем все компоненты конкурентно
+    await asyncio.gather(
+        run_web(),
+        dp.start_polling(bot, allowed_updates=['message', 'callback_query', 'my_chat_member']),
+        reminder_worker(bot),
+        evening_digest_worker(bot),
+        stale_task_reminder_worker(bot)
+    )
 
 if __name__ == "__main__":
     try:
