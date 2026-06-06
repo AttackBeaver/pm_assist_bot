@@ -36,6 +36,13 @@ from bot.utils.parser import parse_task as regex_parse_task
 logger = logging.getLogger(__name__)
 router = Router()
 
+try:
+    from bot.utils.meet_automation import join_and_record_meet
+    MEET_AUTOMATION_AVAILABLE = True
+except ImportError:
+    MEET_AUTOMATION_AVAILABLE = False
+    logger.warning("Playwright не установлен. Команда /join_meet будет недоступна.")
+    join_and_record_meet = None
 
 def _main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
@@ -438,6 +445,9 @@ async def cmd_complete(message: Message):
 
 @router.message(Command("join_meet"))
 async def cmd_join_meet(message: Message):
+    if not MEET_AUTOMATION_AVAILABLE:
+        await message.answer("❌ Функция автоматического подключения к встречам временно недоступна (отсутствуют необходимые компоненты). Пожалуйста, используйте ручную загрузку аудиофайлов.")
+        return
     args = message.text.split()
     if len(args) < 2:
         await message.answer(

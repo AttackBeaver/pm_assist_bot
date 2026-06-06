@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Установка системных зависимостей для Chromium, PulseAudio, ffmpeg
+# Установка системных зависимостей для Chromium, PulseAudio, ffmpeg и playwright
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     chromium \
@@ -35,12 +35,11 @@ RUN pactl load-module module-null-sink sink_name=virtual_sink 2>/dev/null || tru
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Установка playwright и браузера Chromium
+# Установка playwright и браузера Chromium (ОБЯЗАТЕЛЬНО!)
 RUN pip install --no-cache-dir playwright && \
     playwright install chromium && \
     playwright install-deps
 
-# Явно устанавливаем python-multipart (если нет в requirements)
 RUN pip install --no-cache-dir python-multipart
 
 COPY . .
