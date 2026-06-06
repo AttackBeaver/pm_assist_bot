@@ -210,12 +210,10 @@ def complete_task(task_id: str) -> None:
         new_achievements.append("Мастер")
     if new_achievements:
         update_user_stats(responsible_id, achievements_to_add=new_achievements)
-    # Запись в историю (при завершении через API вызовется из callback, здесь дублировать не нужно)
 
 def delete_task(task_id: str) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-    # Удаляем также историю перемещений (опционально)
     with _connect() as conn:
         conn.execute("DELETE FROM task_history WHERE task_id = ?", (task_id,))
 
@@ -238,12 +236,21 @@ def get_average_completion_time(telegram_id: int) -> Optional[float]:
     return total_hours / len(rows)
 
 def get_stale_tasks(days_old: int = 3) -> List[Dict[str, Any]]:
+    """Возвращает задачи, которые находятся в статусе 'pending' или 'in_progress'
+       и у которых нет активности (изменения статуса) более days_old дней."""
     threshold = (datetime.now() - timedelta(days=days_old)).isoformat()
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT id, title, responsible_telegram_id, created_at FROM tasks WHERE status = 'pending' AND created_at < ?",
-            (threshold,)
-        ).fetchall()
+        # Ищем задачи, не завершённые, и у которых последняя запись в истории старше порога
+        rows = conn.execute("""
+            SELECT t.id, t.title, t.responsible_telegram_id, t.created_at
+            FROM tasks t
+            WHERE t.status != 'completed'
+              AND (
+                SELECT MAX(h.changed_at)
+                FROM task_history h
+                WHERE h.task_id = t.id
+              ) < ?
+        """, (threshold,)).fetchall()
         return [dict(row) for row in rows]
 
 # --- Геймификация ---
@@ -297,7 +304,6 @@ def get_telegram_id_by_username(username: str) -> Optional[int]:
 
 # --- Расширенный трекинг скорости и качества ---
 def get_on_time_completion_rate(telegram_id: int) -> float:
-    """Процент задач, выполненных до или в день дедлайна."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT deadline_timestamp, completed_at FROM tasks WHERE responsible_telegram_id = ? AND status = 'completed' AND deadline_timestamp IS NOT NULL",
@@ -317,9 +323,7 @@ def get_on_time_completion_rate(telegram_id: int) -> float:
     return (on_time / len(rows)) * 100
 
 def get_average_time_in_progress(telegram_id: int) -> Optional[float]:
-    """Среднее время в статусе 'in_progress' (часы)."""
     with _connect() as conn:
-        # Получаем ID задач пользователя
         task_ids = conn.execute(
             "SELECT id FROM tasks WHERE responsible_telegram_id = ? AND status = 'completed'",
             (telegram_id,)
@@ -330,12 +334,10 @@ def get_average_time_in_progress(telegram_id: int) -> Optional[float]:
     count = 0
     for t in task_ids:
         task_id = t["id"]
-        # Находим время перехода в 'in_progress'
         entry = conn.execute(
             "SELECT changed_at FROM task_history WHERE task_id = ? AND status_to = 'in_progress' ORDER BY changed_at ASC LIMIT 1",
             (task_id,)
         ).fetchone()
-        # Находим время перехода в 'completed' (или следующий статус)
         exit_ = conn.execute(
             "SELECT changed_at FROM task_history WHERE task_id = ? AND status_to = 'completed' ORDER BY changed_at ASC LIMIT 1",
             (task_id,)
@@ -348,7 +350,6 @@ def get_average_time_in_progress(telegram_id: int) -> Optional[float]:
     return total_hours / count if count > 0 else None
 
 def get_task_status_counts(telegram_id: int) -> Dict[str, int]:
-    """Возвращает количество задач по статусам для пользователя."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT status, COUNT(*) as cnt FROM tasks WHERE responsible_telegram_id = ? GROUP BY status",

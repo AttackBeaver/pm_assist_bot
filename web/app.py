@@ -1,7 +1,7 @@
-﻿import os
+﻿﻿import os
 import sys
 from html import escape
-from fastapi import FastAPI, Form
+from fastapi import FastAPI, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 import logging
 
@@ -190,7 +190,7 @@ def _build_tasks_table(tasks: list, telegram_id: int) -> str:
         '<table class="task-table">'
         "<thead><tr>"
         "<th>Задача</th><th>Описание</th><th>Дедлайн</th><th>Статус</th><th>Действия</th>"
-        "<tr></thead>"
+        "</tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"
         "</table>"
     )
@@ -228,7 +228,7 @@ async def cabinet(telegram_id: int) -> HTMLResponse:
     status_counts = get_task_status_counts(telegram_id)
     pending_count = status_counts.get("pending", 0)
     completed_count = status_counts.get("completed", 0)
-    in_progress_count = status_counts.get("in_progress", 0)  # если есть, иначе 0
+    in_progress_count = status_counts.get("in_progress", 0)
     status_distribution_html = f'<span>🟡 В работе: {in_progress_count}</span> <span>🟢 Выполнено: {completed_count}</span> <span>⚪ Ожидают: {pending_count}</span>'
     
     return HTMLResponse(
@@ -251,7 +251,13 @@ async def cabinet(telegram_id: int) -> HTMLResponse:
 @app.post("/task/{task_id}/complete")
 async def task_complete(task_id: str, telegram_id: int = Form(...)) -> RedirectResponse:
     task = get_task_by_id(task_id)
-    if task and task.get("yougile_card_id") and YOUGILE_TOKEN:
+    if not task:
+        return RedirectResponse(url=f"/cabinet/{telegram_id}?error=not_found", status_code=303)
+    # Проверка прав: только ответственный или автор могут выполнить
+    if task["responsible_telegram_id"] != telegram_id and task["author_telegram_id"] != telegram_id:
+        return RedirectResponse(url=f"/cabinet/{telegram_id}?error=forbidden", status_code=303)
+    
+    if task.get("yougile_card_id") and YOUGILE_TOKEN:
         try:
             client = YouGileClient(YOUGILE_TOKEN)
             done_column_id = YOUGILE_DONE_COLUMN_ID
@@ -268,6 +274,13 @@ async def task_complete(task_id: str, telegram_id: int = Form(...)) -> RedirectR
 
 @app.post("/task/{task_id}/delete")
 async def task_delete(task_id: str, telegram_id: int = Form(...)) -> RedirectResponse:
+    task = get_task_by_id(task_id)
+    if not task:
+        return RedirectResponse(url=f"/cabinet/{telegram_id}?error=not_found", status_code=303)
+    # Проверка прав: только автор может удалить
+    if task["author_telegram_id"] != telegram_id:
+        return RedirectResponse(url=f"/cabinet/{telegram_id}?error=forbidden", status_code=303)
+    
     delete_task(task_id)
     return RedirectResponse(url=f"/cabinet/{telegram_id}", status_code=303)
 

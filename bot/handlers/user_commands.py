@@ -8,6 +8,7 @@ from typing import Optional
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import (
+    CallbackQuery,
     Message,
     ReplyKeyboardMarkup,
     KeyboardButton,
@@ -15,11 +16,14 @@ from aiogram.types import (
     InlineKeyboardButton,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
 
 from config import WEB_BASE_URL, YOUGILE_DO_COLUMN_ID, YOUGILE_DONE_COLUMN_ID, YOUGILE_TOKEN
 from web.database import (
-    add_user, complete_task, set_user_away, clear_user_away,
-    get_tasks_by_user, get_user_stats, get_average_completion_time
+    add_user, complete_task, get_task_by_id, set_user_away, clear_user_away,
+    get_tasks_by_user, get_user_stats, get_average_completion_time,
+    add_task_history
 )
 from yougile_client import YouGileClient
 
@@ -27,7 +31,7 @@ from bot.utils.audio_utils import transcribe_media
 from bot.utils.llm_parser import parse_task_with_llm
 from bot.utils.date_utils import deadline_to_timestamp
 from bot.utils.yougile_utils import create_yougile_task
-from web.database import add_task, get_telegram_id_by_username, add_user
+from web.database import add_task, get_telegram_id_by_username
 import uuid
 import tempfile
 from bot.utils.parser import parse_task as regex_parse_task
@@ -61,10 +65,11 @@ def _main_keyboard() -> ReplyKeyboardMarkup:
             ],
             [
                 KeyboardButton(text="⏰ Ближайшие дедлайны"),
-                KeyboardButton(text="🧪 Тест сценария"),
-                KeyboardButton(text="📞 Встреча"),
+                KeyboardButton(text="👨‍💼 Тест менеджера"),
+                KeyboardButton(text="👷 Тест исполнителя"),
             ],
             [
+                KeyboardButton(text="📞 Встреча"),
                 KeyboardButton(text="❓ Помощь"),
             ],
         ],
@@ -74,34 +79,17 @@ def _main_keyboard() -> ReplyKeyboardMarkup:
 
 
 def _cabinet_url_text(telegram_id: int) -> str:
-    return f"{WEB_BASE_URL}?id={telegram_id}"
+    return f"{WEB_BASE_URL}/cabinet/{telegram_id}"
 
 
 def _cabinet_inline(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
-    url = f"{WEB_BASE_URL}?id={telegram_id}"
+    url = _cabinet_url_text(telegram_id)
     if "localhost" in WEB_BASE_URL or "127.0.0.1" in WEB_BASE_URL:
         return None
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🌐 Открыть личный кабинет", url=url)
     ]])
 
-
-# # ---------- Обработчик встречи ----------
-# @router.message(Command("meet"))
-# @router.message(F.text == "📞 Встреча")
-# async def cmd_meet(message: Message) -> None:
-#     await message.answer(
-#         "📢 **Расшифровка встречи**\n\n"
-#         "Вы можете отправить мне:\n"
-#         "• Голосовое сообщение\n"
-#         "• Аудиофайл (MP3, OGG, WAV)\n"
-#         "• Видеофайл (WEBM, MP4, AVI, MOV)\n"
-#         "• **Публичную ссылку на Яндекс.Диск** с записью встречи\n\n"
-#         "Я распознаю речь, выделю задачи, дедлайны и ответственных, и создам карточки в YouGile.\n\n"
-#         "⚠️ **Важно:** Telegram не позволяет обрабатывать файлы >20 МБ. Для больших файлов используйте ссылку на Яндекс.Диск.",
-#         parse_mode="Markdown",
-#         reply_markup=_main_keyboard()
-#     )
 
 # ---------- Основные команды ----------
 @router.message(Command("start"))
@@ -290,26 +278,6 @@ async def cmd_deadlines(message: Message) -> None:
     await message.answer("\n".join(lines), parse_mode="Markdown", reply_markup=_main_keyboard())
 
 
-@router.message(F.text == "🧪 Тест сценария")
-async def cmd_test_scenario(message: Message) -> None:
-    uid = message.from_user.id
-    cabinet_url = _cabinet_url_text(uid)
-    await message.answer(
-        f"🧪 **Демо-сценарий PM-Assist Bot**\n\n"
-        "1. Добавьте меня в групповой чат, если ещё не сделали.\n"
-        "2. Напишите в чате: `@someone подготовить отчёт до пятницы`\n"
-        "   → Я автоматически создам карточку в YouGile.\n"
-        "3. Нажмите «Отменить» под созданной задачей, чтобы удалить её.\n"
-        "4. Отправьте голосовое: «Сделать презентацию к завтра»\n"
-        f"5. Откройте веб-кабинет: {cabinet_url}\n"
-        "6. Там вы увидите XP, уровень, ачивки.\n"
-        "7. Выполните задачу – карточка переместится в «Готово».\n\n"
-        "🎯 **Команды**: /stats, /achievements, /deadlines, /away, /back",
-        parse_mode="Markdown",
-        reply_markup=_main_keyboard()
-    )
-
-
 @router.message(Command("recommendations"))
 @router.message(F.text == "📚 Рекомендации")
 async def cmd_recommendations(message: Message):
@@ -391,9 +359,11 @@ async def cmd_move(message: Message):
         success = client.move_task(yougile_card_id, column_id)
         if success:
             if column_id == YOUGILE_DONE_COLUMN_ID:
+                add_task_history(task["id"], 'completed', status_from=task["status"], comment='Завершено через /move')
                 complete_task(task["id"])
                 await message.answer(f"✅ Задача «{task['title']}» завершена и перемещена в «Готово».")
             else:
+                add_task_history(task["id"], 'in_progress', status_from=task["status"], comment='Перемещено в работу через /move')
                 await message.answer(f"✅ Задача «{task['title']}» перемещена в «{column_name.capitalize()}».")
         else:
             await message.answer("❌ Не удалось переместить задачу. Проверьте настройки YouGile.")
@@ -434,7 +404,9 @@ async def cmd_complete(message: Message):
 
         client = YouGileClient(YOUGILE_TOKEN)
         success = client.move_task(yougile_card_id, YOUGILE_DONE_COLUMN_ID)
+        
         if success:
+            add_task_history(task["id"], 'completed', status_from=task["status"], comment='Завершено через /complete')
             complete_task(task["id"])
             await message.answer(f"✅ Задача «{task['title']}» завершена и перемещена в «Готово».")
         else:
@@ -460,7 +432,6 @@ async def cmd_join_meet(message: Message):
             parse_mode="Markdown"
         )
         return
-    # Далее оригинальный код /join_meet (с аргументами)
     args = message.text.split()
     if len(args) < 2:
         await message.answer(
@@ -486,20 +457,17 @@ async def process_auto_meet(meet_url: str, duration: int, original_message: Mess
         if not success:
             await bot.send_message(chat_id, "❌ Не удалось захватить звук. Возможно, модуль loopback PulseAudio не загружен или нет прав.")
             return
-        # Транскрибация
         await original_message.answer("🔊 Распознаю речь...")
         transcribed_text = transcribe_media(temp_wav)
         if not transcribed_text:
             await bot.send_message(chat_id, "❌ Не удалось распознать речь в записи.")
             return
-        # Парсинг задач
         parse_result = parse_task_with_llm(transcribed_text)
         if not parse_result or parse_result.get("confidence", 0) < 50:
             parse_result = regex_parse_task(transcribed_text, known_usernames=[])
         if not parse_result or parse_result.get("confidence", 0) < 50:
             await bot.send_message(chat_id, "🔊 Не удалось выделить задачи. Возможно, встреча не содержала задач.")
             return
-        # Создание карточек
         assignee_usernames = parse_result.get("assignees", [])
         if not assignee_usernames:
             assignee_usernames = [None]
@@ -530,9 +498,8 @@ async def process_auto_meet(meet_url: str, duration: int, original_message: Mess
                     yougile_card_id=card_id,
                     chat_id=chat_id,
                 )
+                add_task_history(task_uuid, 'pending', comment='Задача создана из встречи')
                 created_tasks.append((parse_result["task"], assignee))
-        # Формируем ответ
-        tasks_summary = "\n".join([f"• {t[0]} (ответственный: {t[1] or 'не назначен'})" for t in created_tasks]) if created_tasks else "—"
         reply = (
             f"🎤 **Встреча обработана!**\n\n"
             f"📝 **Задача:** {parse_result['task']}\n"
@@ -547,3 +514,231 @@ async def process_auto_meet(meet_url: str, duration: int, original_message: Mess
     finally:
         if os.path.exists(temp_wav):
             os.remove(temp_wav)
+
+
+# ---------- Тестовые сценарии ----------
+class ManagerTest(StatesGroup):
+    step_1_created = State()
+    step_2_moved = State()
+    step_3_completed = State()
+
+class ExecutorTest(StatesGroup):
+    step_1_created = State()
+    step_2_taken = State()
+    step_3_completed = State()
+
+
+@router.message(F.text == "👨‍💼 Тест менеджера")
+async def start_manager_test(message: Message, state: FSMContext):
+    uid = message.from_user.id
+    add_user(uid, message.from_user.username, message.from_user.full_name)
+    
+    task_title = "Подготовить отчёт по итогам спринта"
+    task_desc = "Собрать метрики, сделать выводы, презентацию. Дедлайн: пятница 18:00"
+    deadline_str = "пятница 18:00"
+    deadline_ts = deadline_to_timestamp(deadline_str)
+    
+    card_id = await create_yougile_task(task_title, task_desc, deadline_str)
+    task_uuid = str(uuid.uuid4())
+    add_task(
+        task_id=task_uuid,
+        title=task_title,
+        description=task_desc,
+        responsible_telegram_id=uid,
+        author_telegram_id=uid,
+        deadline=deadline_str,
+        deadline_timestamp=deadline_ts,
+        yougile_card_id=card_id,
+        chat_id=message.chat.id,
+    )
+    add_task_history(task_uuid, 'pending', comment='Создано в тесте менеджера')
+    
+    await message.answer(
+        f"✅ **Шаг 1/3**\n\n"
+        f"Создана задача:\n"
+        f"📋 {task_title}\n"
+        f"⏰ {deadline_str}\n"
+        f"👤 Вы – ответственный.\n\n"
+        f"Нажмите «Далее», чтобы взять задачу в работу.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➡️ Далее", callback_data="manager_test_next_1")]
+        ])
+    )
+    await state.set_state(ManagerTest.step_1_created)
+    await state.update_data(task_id=task_uuid, title=task_title)
+
+
+@router.callback_query(ManagerTest.step_1_created, lambda c: c.data == "manager_test_next_1")
+async def manager_test_step2(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    task_id = data["task_id"]
+    task_title = data["title"]
+    
+    task = get_task_by_id(task_id)
+    if task and task.get("yougile_card_id") and YOUGILE_TOKEN and YOUGILE_DO_COLUMN_ID:
+        client = YouGileClient(YOUGILE_TOKEN)
+        client.move_task(task["yougile_card_id"], YOUGILE_DO_COLUMN_ID)
+    add_task_history(task_id, 'in_progress', status_from='pending', comment='Взято в работу')
+    
+    await callback.message.edit_text(
+        f"✅ **Шаг 2/3**\n\n"
+        f"Задача «{task_title}» перемещена в колонку «В процессе».\n"
+        f"Теперь завершите её (нажмите «Далее»).",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➡️ Далее", callback_data="manager_test_next_2")]
+        ])
+    )
+    await state.set_state(ManagerTest.step_2_moved)
+    await callback.answer()
+
+
+@router.callback_query(ManagerTest.step_2_moved, lambda c: c.data == "manager_test_next_2")
+async def manager_test_step3(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    task_id = data["task_id"]
+    task_title = data["title"]
+    
+    task = get_task_by_id(task_id)
+    if task and task.get("yougile_card_id") and YOUGILE_TOKEN and YOUGILE_DONE_COLUMN_ID:
+        client = YouGileClient(YOUGILE_TOKEN)
+        client.move_task(task["yougile_card_id"], YOUGILE_DONE_COLUMN_ID)
+    complete_task(task_id)
+    
+    stats = get_user_stats(callback.from_user.id)
+    xp = stats["xp"]
+    level = stats["level"]
+    achievements = stats.get("achievements", [])
+    ach_text = "\n".join([f"🏆 {a}" for a in achievements]) if achievements else "Пока нет"
+    
+    await callback.message.edit_text(
+        f"✅ **Шаг 3/3 – Тест завершён!**\n\n"
+        f"Задача «{task_title}» выполнена.\n"
+        f"✨ Ваш опыт: {xp} XP, уровень {level}\n\n"
+        f"🏅 Достижения:\n{ach_text}\n\n"
+        f"Вы можете проверить задачи командой /tasks или зайти в личный кабинет.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Мои задачи", callback_data="user_tasks")]
+        ])
+    )
+    await state.clear()
+    await callback.answer()
+
+
+@router.message(F.text == "👷 Тест исполнителя")
+async def start_executor_test(message: Message, state: FSMContext):
+    executor_id = message.from_user.id
+    add_user(executor_id, message.from_user.username, message.from_user.full_name)
+    
+    manager_id = 999999
+    add_user(manager_id, "test_manager", "Тестовый Менеджер")
+    
+    task_title = "Проверить код после рефакторинга"
+    task_desc = "Запустить тесты, проверить стиль, оставить комментарии. Срок – завтра до обеда."
+    deadline_str = "завтра 12:00"
+    deadline_ts = deadline_to_timestamp(deadline_str)
+    
+    card_id = await create_yougile_task(task_title, task_desc, deadline_str)
+    task_uuid = str(uuid.uuid4())
+    add_task(
+        task_id=task_uuid,
+        title=task_title,
+        description=task_desc,
+        responsible_telegram_id=executor_id,
+        author_telegram_id=manager_id,
+        deadline=deadline_str,
+        deadline_timestamp=deadline_ts,
+        yougile_card_id=card_id,
+        chat_id=message.chat.id,
+    )
+    add_task_history(task_uuid, 'pending', comment='Задача от менеджера в тесте исполнителя')
+    
+    await message.answer(
+        f"📨 **Шаг 1/3**\n\n"
+        f"Менеджер назначил вам задачу:\n"
+        f"📋 {task_title}\n"
+        f"⏰ {deadline_str}\n\n"
+        f"Нажмите «Далее», чтобы взять её в работу.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➡️ Далее", callback_data="executor_test_next_1")]
+        ])
+    )
+    await state.set_state(ExecutorTest.step_1_created)
+    await state.update_data(task_id=task_uuid, title=task_title)
+
+
+@router.callback_query(ExecutorTest.step_1_created, lambda c: c.data == "executor_test_next_1")
+async def executor_test_step2(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    task_id = data["task_id"]
+    task_title = data["title"]
+    
+    task = get_task_by_id(task_id)
+    if task and task.get("yougile_card_id") and YOUGILE_TOKEN and YOUGILE_DO_COLUMN_ID:
+        client = YouGileClient(YOUGILE_TOKEN)
+        client.move_task(task["yougile_card_id"], YOUGILE_DO_COLUMN_ID)
+    add_task_history(task_id, 'in_progress', status_from='pending', comment='Взято в работу')
+    
+    await callback.message.edit_text(
+        f"✅ **Шаг 2/3**\n\n"
+        f"Задача «{task_title}» взята в работу.\n"
+        f"Теперь выполните её (нажмите «Далее»).",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➡️ Далее", callback_data="executor_test_next_2")]
+        ])
+    )
+    await state.set_state(ExecutorTest.step_2_taken)
+    await callback.answer()
+
+
+@router.callback_query(ExecutorTest.step_2_taken, lambda c: c.data == "executor_test_next_2")
+async def executor_test_step3(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    task_id = data["task_id"]
+    task_title = data["title"]
+    
+    task = get_task_by_id(task_id)
+    if task and task.get("yougile_card_id") and YOUGILE_TOKEN and YOUGILE_DONE_COLUMN_ID:
+        client = YouGileClient(YOUGILE_TOKEN)
+        client.move_task(task["yougile_card_id"], YOUGILE_DONE_COLUMN_ID)
+    complete_task(task_id)
+    
+    stats = get_user_stats(callback.from_user.id)
+    xp = stats["xp"]
+    level = stats["level"]
+    achievements = stats.get("achievements", [])
+    ach_text = "\n".join([f"🏆 {a}" for a in achievements]) if achievements else "Пока нет"
+    
+    await callback.message.edit_text(
+        f"✅ **Шаг 3/3 – Тест исполнителя завершён!**\n\n"
+        f"Выполнена задача «{task_title}».\n"
+        f"✨ Ваш опыт: {xp} XP, уровень {level}\n\n"
+        f"🏅 Достижения:\n{ach_text}\n\n"
+        f"Теперь вы можете проверить свои задачи и ачивки.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Статистика", callback_data="user_stats")]
+        ])
+    )
+    await state.clear()
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "user_tasks")
+async def show_tasks_callback(callback: CallbackQuery):
+    await callback.answer()
+    uid = callback.from_user.id
+    tasks = get_tasks_by_user(uid, status="pending")
+    if not tasks:
+        await callback.message.answer("✨ У вас нет активных задач.")
+    else:
+        text = "📋 Ваши задачи:\n" + "\n".join([f"- {t['title']}" for t in tasks])
+        await callback.message.answer(text)
+
+
+@router.callback_query(lambda c: c.data == "user_stats")
+async def show_stats_callback(callback: CallbackQuery):
+    await callback.answer()
+    uid = callback.from_user.id
+    stats = get_user_stats(uid)
+    await callback.message.answer(
+        f"📊 Ваша статистика:\n✨ XP: {stats['xp']}\n🧙 Уровень: {stats['level']}\n🏆 Достижения: {', '.join(stats.get('achievements', [])) or 'нет'}"
+    )

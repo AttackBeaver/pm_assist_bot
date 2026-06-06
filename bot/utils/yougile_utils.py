@@ -21,7 +21,15 @@ async def create_yougile_task(
         if not columns:
             logger.error("Не удалось получить колонки YouGile")
             return None
-        column_id = columns[0]["id"]
+        # Ищем колонку "Сделать" или "To do"
+        for col in columns:
+            title_lower = col.get("title", "").lower()
+            if "сделать" in title_lower or "to do" in title_lower:
+                column_id = col["id"]
+                break
+        if not column_id:
+            logger.warning("Колонка 'Сделать' не найдена, берём первую")
+            column_id = columns[0]["id"]
     deadline_ts = deadline_to_timestamp(deadline_str) if deadline_str else None
     result = client.create_task(title, column_id, description, deadline_timestamp=deadline_ts)
     return result.get("id") if result else None

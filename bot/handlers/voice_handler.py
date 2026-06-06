@@ -3,6 +3,7 @@ import os
 import tempfile
 import logging
 import uuid
+import requests  # добавлен для HEAD-запроса
 from aiogram import Router, F, Bot
 from aiogram.types import Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -13,12 +14,13 @@ from bot.utils.parser import parse_task as regex_parse_task
 from bot.utils.llm_parser import parse_task_with_llm
 from bot.utils.date_utils import deadline_to_timestamp
 from bot.utils.yougile_utils import create_yougile_task
-from web.database import add_user, add_task, get_telegram_id_by_username
+from web.database import add_user, add_task, get_telegram_id_by_username, add_task_history
 
 logger = logging.getLogger(__name__)
 router = Router()
 _CONFIDENCE_THRESHOLD = 70
 _MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 МБ для Telegram-файлов
+_MAX_DOWNLOAD_SIZE = 200 * 1024 * 1024  # 200 МБ для ссылок Яндекс.Диск
 
 
 async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | None:
@@ -41,7 +43,6 @@ async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | Non
 @router.message(F.text, F.chat.type == "private")
 async def handle_yadisk_link(message: Message, bot: Bot) -> None:
     text = message.text
-    # Ищем ссылку на disk.yandex.ru (или disk.yandex.com)
     match = re.search(r'(https?://disk\.yandex\.(?:ru|com)/[^\s]+)', text)
     if not match:
         return
@@ -53,6 +54,17 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
     if not direct_link:
         await message.answer("❌ Не удалось получить прямую ссылку на файл. Убедитесь, что ссылка публичная и ведёт на файл.")
         return
+
+    # Проверка размера файла перед скачиванием
+    try:
+        head_resp = requests.head(direct_link, timeout=10)
+        if head_resp.status_code == 200:
+            file_size = int(head_resp.headers.get('content-length', 0))
+            if file_size > _MAX_DOWNLOAD_SIZE:
+                await message.answer(f"❌ Файл слишком большой ({file_size // (1024*1024)} МБ). Максимальный размер для обработки: 200 МБ.")
+                return
+    except Exception as e:
+        logger.warning(f"Не удалось проверить размер файла: {e}")
 
     temp_dir = tempfile.gettempdir()
     temp_filename = f"yadisk_{uuid.uuid4().hex}.tmp"
@@ -76,7 +88,6 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
             await status_msg.edit_text("❌ Не удалось распознать речь в файле.")
             return
 
-        # Гибридный парсинг
         llm_result = parse_task_with_llm(transcribed_text)
         if llm_result and llm_result.get("confidence", 0) >= _CONFIDENCE_THRESHOLD:
             parse_result = llm_result
@@ -94,6 +105,7 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
             assignee_usernames = [None]
 
         author_id = message.from_user.id
+        created_tasks = []  # для сбора информации о созданных задачах
 
         for assignee_username in assignee_usernames:
             responsible_id = author_id
@@ -123,23 +135,12 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
                 yougile_card_id=card_id,
                 chat_id=message.chat.id,
             )
+            # Добавляем историю
+            add_task_history(task_uuid, 'pending', comment='Задача создана из ссылки на Яндекс.Диск')
 
-            if responsible_id == author_id:
-                keyboard = InlineKeyboardBuilder()
-                keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
-                keyboard.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
-                keyboard.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
-                keyboard.adjust(1)
-                await bot.send_message(
-                    author_id,
-                    f"📌 Вы создали задачу из файла по ссылке:\n\n"
-                    f"📋 {parse_result['task']}\n"
-                    f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n"
-                    f"👥 Ответственные: {', '.join(assignee_usernames) if assignee_usernames[0] else 'вы'}\n\n"
-                    f"Управляйте задачей:",
-                    reply_markup=keyboard.as_markup()
-                )
-            else:
+            # Отправка уведомлений (но не автору внутри цикла)
+            if responsible_id != author_id:
+                # Уведомление ответственному
                 keyboard_worker = InlineKeyboardBuilder()
                 keyboard_worker.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
                 keyboard_worker.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
@@ -152,17 +153,27 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
                     f"Управляйте задачей:",
                     reply_markup=keyboard_worker.as_markup()
                 )
-                keyboard_author = InlineKeyboardBuilder()
-                keyboard_author.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
-                keyboard_author.adjust(1)
-                await bot.send_message(
-                    author_id,
-                    f"📌 Вы создали задачу для @{assignee_username} из файла по ссылке:\n\n"
-                    f"📋 {parse_result['task']}\n"
-                    f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n\n"
-                    f"Вы можете удалить задачу, если она создана ошибочно:",
-                    reply_markup=keyboard_author.as_markup()
-                )
+            created_tasks.append((parse_result["task"], assignee_username, task_uuid))
+
+        # Отправляем автору одно сводное сообщение
+        if created_tasks:
+            assignees_str = ', '.join([f"@{a}" if a else "вы" for _, a, _ in created_tasks])
+            # Используем task_uuid первой задачи для кнопок (если только одна задача – нормально, если несколько – автору будет несколько сообщений, но лучше так)
+            first_uuid = created_tasks[0][2]
+            keyboard = InlineKeyboardBuilder()
+            keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{first_uuid}")
+            keyboard.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{first_uuid}")
+            keyboard.button(text="✅ Завершить", callback_data=f"complete_task_{first_uuid}")
+            keyboard.adjust(1)
+            await bot.send_message(
+                author_id,
+                f"📌 Вы создали задачу из файла по ссылке:\n\n"
+                f"📋 {parse_result['task']}\n"
+                f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n"
+                f"👥 Ответственные: {assignees_str}\n\n"
+                f"Управляйте задачей:",
+                reply_markup=keyboard.as_markup()
+            )
 
         reply_text = (
             f"✅ Задача автоматически создана в YouGile!\n\n"
@@ -184,7 +195,6 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
 async def handle_media_message(message: Message, bot: Bot) -> None:
     add_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
 
-    # Проверка размера для Telegram-файлов
     file_size = 0
     if message.document:
         file_size = message.document.file_size
@@ -220,7 +230,6 @@ async def handle_media_message(message: Message, bot: Bot) -> None:
             await status_msg.edit_text("❌ Не удалось распознать речь.")
             return
 
-        # Гибридный парсинг
         llm_result = parse_task_with_llm(transcribed_text)
         if llm_result and llm_result.get("confidence", 0) >= _CONFIDENCE_THRESHOLD:
             parse_result = llm_result
@@ -233,6 +242,7 @@ async def handle_media_message(message: Message, bot: Bot) -> None:
 
         assignee_usernames = parse_result.get("assignees", []) or [None]
         author_id = message.from_user.id
+        created_tasks = []
 
         for assignee_username in assignee_usernames:
             responsible_id = author_id
@@ -262,25 +272,40 @@ async def handle_media_message(message: Message, bot: Bot) -> None:
                 yougile_card_id=card_id,
                 chat_id=message.chat.id,
             )
+            add_task_history(task_uuid, 'pending', comment='Задача создана из медиафайла')
 
-            # ... (уведомления такие же, как в обработчике ссылок)
-            if responsible_id == author_id:
-                keyboard = InlineKeyboardBuilder()
-                keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
-                keyboard.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
-                keyboard.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
-                keyboard.adjust(1)
-                await bot.send_message(author_id, f"📌 Вы создали задачу из файла:\n\n📋 {parse_result['task']}\n⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n👥 Ответственные: {', '.join(assignee_usernames) if assignee_usernames[0] else 'вы'}\n\nУправляйте задачей:", reply_markup=keyboard.as_markup())
-            else:
+            if responsible_id != author_id:
                 keyboard_worker = InlineKeyboardBuilder()
                 keyboard_worker.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
                 keyboard_worker.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
                 keyboard_worker.adjust(1)
-                await bot.send_message(responsible_id, f"🔔 Вам назначена задача из файла:\n\n📋 {parse_result['task']}\n⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n\nУправляйте задачей:", reply_markup=keyboard_worker.as_markup())
-                keyboard_author = InlineKeyboardBuilder()
-                keyboard_author.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
-                keyboard_author.adjust(1)
-                await bot.send_message(author_id, f"📌 Вы создали задачу для @{assignee_username}:\n\n📋 {parse_result['task']}\n⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n\nВы можете удалить задачу:", reply_markup=keyboard_author.as_markup())
+                await bot.send_message(
+                    responsible_id,
+                    f"🔔 Вам назначена задача из файла:\n\n"
+                    f"📋 {parse_result['task']}\n"
+                    f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n\n"
+                    f"Управляйте задачей:",
+                    reply_markup=keyboard_worker.as_markup()
+                )
+            created_tasks.append((parse_result["task"], assignee_username, task_uuid))
+
+        if created_tasks:
+            assignees_str = ', '.join([f"@{a}" if a else "вы" for _, a, _ in created_tasks])
+            first_uuid = created_tasks[0][2]
+            keyboard = InlineKeyboardBuilder()
+            keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{first_uuid}")
+            keyboard.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{first_uuid}")
+            keyboard.button(text="✅ Завершить", callback_data=f"complete_task_{first_uuid}")
+            keyboard.adjust(1)
+            await bot.send_message(
+                author_id,
+                f"📌 Вы создали задачу из файла:\n\n"
+                f"📋 {parse_result['task']}\n"
+                f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n"
+                f"👥 Ответственные: {assignees_str}\n\n"
+                f"Управляйте задачей:",
+                reply_markup=keyboard.as_markup()
+            )
 
         reply_text = f"✅ Задача автоматически создана в YouGile!\n\n📋 {parse_result['task']}\n⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n👥 Ответственные: {', '.join(assignee_usernames) if assignee_usernames[0] else 'не назначены'}"
         await status_msg.edit_text(reply_text)
