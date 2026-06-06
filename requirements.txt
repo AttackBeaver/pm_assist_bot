@@ -1,0 +1,8 @@
+aiogram
+python-dotenv
+requests
+pytz
+sqlalchemy
+fastapi
+uvicorn
+python-multipart
