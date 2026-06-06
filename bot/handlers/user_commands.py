@@ -44,6 +44,7 @@ def _main_keyboard() -> ReplyKeyboardMarkup:
             [
                 KeyboardButton(text="⏰ Ближайшие дедлайны"),
                 KeyboardButton(text="🧪 Тест сценария"),
+                KeyboardButton(text="📞 Встреча"),
             ],
             [
                 KeyboardButton(text="❓ Помощь"),
@@ -55,7 +56,6 @@ def _main_keyboard() -> ReplyKeyboardMarkup:
 
 
 def _cabinet_url_text(telegram_id: int) -> str:
-    """Возвращает строку с URL кабинета для вставки в текст сообщения."""
     return f"{WEB_BASE_URL}?id={telegram_id}"
 
 
@@ -66,6 +66,23 @@ def _cabinet_inline(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🌐 Открыть личный кабинет", url=url)
     ]])
+
+
+# ---------- Обработчик встречи ----------
+@router.message(Command("meet"))
+@router.message(F.text == "📞 Встреча")
+async def cmd_meet(message: Message) -> None:
+    await message.answer(
+        "📢 **Расшифровка встречи**\n\n"
+        "Вы можете загрузить запись встречи в виде аудиофайла или голосового сообщения, и я:\n"
+        "• Распознаю речь\n"
+        "• Выделю задачи, дедлайны и ответственных\n"
+        "• Автоматически создам карточки в YouGile\n\n"
+        "Просто отправьте мне аудиофайл (MP3, OGG, WAV) или голосовое сообщение.\n"
+        "Если встреча была в Яндекс Телемосте, скачайте запись и пришлите её мне.",
+        parse_mode="Markdown",
+        reply_markup=_main_keyboard()
+    )
 
 
 # ---------- Основные команды ----------
@@ -107,7 +124,8 @@ async def cmd_help(message: Message) -> None:
         "/recommendations — персональные рекомендации по курсам\n\n"
         "🛠 Настройки:\n"
         "/away [причина] — временно отключить назначение задач\n"
-        "/back — снова доступен для задач\n",
+        "/back — снова доступен для задач\n"
+        "/meet — инструкция по загрузке записи встречи\n",
         parse_mode="Markdown",
         reply_markup=_main_keyboard()
     )
