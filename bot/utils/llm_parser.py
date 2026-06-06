@@ -63,14 +63,12 @@ def parse_task_with_llm(text: str) -> Optional[Dict[str, Any]]:
     if not client:
         return None
 
+    # Быстрая эвристика: если в сообщении нет ключевых слов, возможно, это не задача
+    # Но мы всё равно спросим LLM, потом проверим
     system_prompt = """
-Ты — ассистент по управлению задачами. Из текста сообщения извлеки:
-- саму задачу (кратко)
-- дедлайн (в формате ДД.ММ.ГГГГ или словесное описание, например "завтра", "пятница", "конец недели")
-- ответственных (список @username или имён или электронная почта, если есть)
-Верни ответ только в формате JSON:
-{"task": "текст задачи", "deadline": "строка дедлайна", "assignees": ["user1", "user2"]}
-Si el campo no está presente, usa null.
+Ты — ассистент по управлению задачами. Из текста сообщения извлеки задачу, дедлайн и ответственных (Имена, пользователи телеграмм (@username), электронные почты).
+Если сообщение не содержит задачи (например, просто "привет", "проверка", "как дела"), верни {"task": null, "deadline": null, "assignees": []}.
+Верни ответ только в формате JSON.
 """
     prompt = f"Сообщение: {text}"
     response = client.generate_text(prompt, system_prompt=system_prompt)
@@ -85,6 +83,22 @@ Si el campo no está presente, usa null.
         assignees = data.get("assignees") or []
         if not isinstance(assignees, list):
             assignees = [assignees] if assignees else []
+
+        # ---- ПОСТ-ВАЛИДАЦИЯ ----
+        # Если задача пустая или очень короткая (<5 символов), отбрасываем
+        if not task or len(task.strip()) < 5:
+            return None
+        # Если в исходном сообщении нет ключевых слов и нет дедлайна, а LLM придумал задачу – отбрасываем
+        from bot.utils.parser import _TASK_KEYWORDS  # временно импортируем для проверки
+        import re
+        has_keyword = any(re.search(rf'\b{kw}\b', text.lower()) for kw in _TASK_KEYWORDS)
+        if not has_keyword and not deadline and not assignees:
+            # Слово "проверка" не является ключевым, но LLM мог принять его за задачу
+            # Дополнительная проверка: если сообщение не содержит глаголов действия
+            action_words = ["сделать", "подготовить", "написать", "обновить", "проверить", "отправить", "создать"]
+            if not any(word in text.lower() for word in action_words):
+                return None
+
         return {
             "task": task,
             "deadline": deadline,
