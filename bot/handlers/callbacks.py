@@ -4,7 +4,7 @@ from typing import Optional
 
 from aiogram import Router
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder   # <-- ДОБАВИТЬ
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from yougile_client import YouGileClient
 from config import YOUGILE_TOKEN, WEB_BASE_URL, YOUGILE_DO_COLUMN_ID, YOUGILE_DONE_COLUMN_ID
@@ -22,7 +22,7 @@ def _cabinet_button(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
     ]])
 
 
-# ---------- Обработчик отмены задачи ----------
+# ---------- Отмена задачи (удаление) ----------
 @router.callback_query(lambda c: c.data.startswith("cancel_task_"))
 async def cancel_task_callback(callback: CallbackQuery):
     task_uuid = callback.data.removeprefix("cancel_task_")
@@ -47,7 +47,7 @@ async def cancel_task_callback(callback: CallbackQuery):
     await callback.answer()
 
 
-# ---------- Управление задачами (из списка) ----------
+# ---------- Управление задачами из списка "Мои задачи" ----------
 @router.callback_query(lambda c: c.data.startswith("manage_task_"))
 async def manage_task_callback(callback: CallbackQuery):
     task_id = callback.data.removeprefix("manage_task_")
@@ -57,10 +57,18 @@ async def manage_task_callback(callback: CallbackQuery):
         await callback.message.delete()
         return
 
+    user_id = callback.from_user.id
+    author_id = task.get("author_telegram_id")
+    responsible_id = task.get("responsible_telegram_id")
+
     builder = InlineKeyboardBuilder()
-    builder.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_id}")
-    builder.button(text="✅ Завершить", callback_data=f"complete_task_{task_id}")
-    builder.button(text="❌ Удалить", callback_data=f"cancel_task_{task_id}")
+    # Удаление доступно только автору
+    if user_id == author_id:
+        builder.button(text="❌ Удалить", callback_data=f"cancel_task_{task_id}")
+    # Кнопки "Взять в работу" и "Завершить" – автору и ответственному
+    if user_id == author_id or user_id == responsible_id:
+        builder.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_id}")
+        builder.button(text="✅ Завершить", callback_data=f"complete_task_{task_id}")
     builder.adjust(1)
 
     await callback.message.edit_text(
@@ -74,6 +82,7 @@ async def manage_task_callback(callback: CallbackQuery):
     await callback.answer()
 
 
+# ---------- Перемещение в колонку "В процессе" ----------
 @router.callback_query(lambda c: c.data.startswith("move_to_do_"))
 async def move_to_do_callback(callback: CallbackQuery):
     task_id = callback.data.removeprefix("move_to_do_")
@@ -94,6 +103,7 @@ async def move_to_do_callback(callback: CallbackQuery):
         await callback.answer("Не удалось переместить задачу", show_alert=True)
 
 
+# ---------- Завершение задачи (перемещение в "Готово") ----------
 @router.callback_query(lambda c: c.data.startswith("complete_task_"))
 async def complete_task_callback(callback: CallbackQuery):
     task_id = callback.data.removeprefix("complete_task_")

@@ -18,6 +18,7 @@ def init_db() -> None:
             deadline TEXT,
             deadline_timestamp INTEGER,
             responsible_telegram_id INTEGER,
+            author_telegram_id INTEGER,
             yougile_card_id TEXT,
             chat_id INTEGER,
             created_at TEXT,
@@ -43,6 +44,10 @@ def init_db() -> None:
         # Миграции
         try:
             conn.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE tasks ADD COLUMN author_telegram_id INTEGER")
         except sqlite3.OperationalError:
             pass
         try:
@@ -94,23 +99,32 @@ def get_pending_user_ids() -> List[int]:
         return [row["responsible_telegram_id"] for row in rows]
 
 # --- Задачи ---
-def add_task(task_id: str, title: str, description: str, responsible_telegram_id: int,
-             deadline: Optional[str] = None, deadline_timestamp: Optional[int] = None,
-             yougile_card_id: Optional[str] = None, chat_id: Optional[int] = None) -> None:
+def add_task(
+    task_id: str,
+    title: str,
+    description: str,
+    responsible_telegram_id: int,
+    author_telegram_id: int,
+    deadline: Optional[str] = None,
+    deadline_timestamp: Optional[int] = None,
+    yougile_card_id: Optional[str] = None,
+    chat_id: Optional[int] = None,
+) -> None:
     with _connect() as conn:
         conn.execute(
-            """INSERT INTO tasks (id, title, description, status, deadline, deadline_timestamp,
-                 responsible_telegram_id, yougile_card_id, chat_id, created_at)
-               VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO tasks
+                (id, title, description, status, deadline, deadline_timestamp,
+                 responsible_telegram_id, author_telegram_id, yougile_card_id, chat_id, created_at)
+               VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)""",
             (task_id, title, description, deadline, deadline_timestamp,
-             responsible_telegram_id, yougile_card_id, chat_id, datetime.now().isoformat())
+             responsible_telegram_id, author_telegram_id, yougile_card_id, chat_id, datetime.now().isoformat())
         )
-    # Начисляем опыт за создание (+5 XP) и увеличиваем счётчик созданных
-    update_user_stats(responsible_telegram_id, xp_delta=5, tasks_created_delta=1)
-    # Проверка ачивки "Первая задача"
-    tasks = get_tasks_by_user(responsible_telegram_id)
+    # Начисляем опыт за создание (+5 XP) автору
+    update_user_stats(author_telegram_id, xp_delta=5, tasks_created_delta=1)
+    # Проверка ачивки "Первая задача" (у автора)
+    tasks = get_tasks_by_user(author_telegram_id)
     if len(tasks) == 1:
-        update_user_stats(responsible_telegram_id, achievements_to_add=["🏅 Первая задача"])
+        update_user_stats(author_telegram_id, achievements_to_add=["🏅 Первая задача"])
 
 def get_tasks_by_user(telegram_id: int, status: Optional[str] = None) -> List[Dict[str, Any]]:
     with _connect() as conn:
@@ -150,16 +164,14 @@ def get_tasks_with_upcoming_deadline(hours_before: int = 2) -> List[Dict[str, An
             if t["deadline_timestamp"] and now_ms < t["deadline_timestamp"] <= threshold_ms]
 
 def complete_task(task_id: str) -> None:
-    # Получаем ответственного до обновления
     task = get_task_by_id(task_id)
     if not task:
         return
     responsible_id = task["responsible_telegram_id"]
-    # Обновляем статус и время завершения
     with _connect() as conn:
         conn.execute("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?",
                      (datetime.now().isoformat(), task_id))
-    # Начисляем опыт за выполнение (+10 XP)
+    # Начисляем опыт за выполнение (+10 XP) ответственному
     update_user_stats(responsible_id, xp_delta=10, tasks_completed_delta=1)
     # Проверяем ачивки
     new_achievements = []
@@ -181,7 +193,6 @@ def delete_task(task_id: str) -> None:
         conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
 
 def get_average_completion_time(telegram_id: int) -> Optional[float]:
-    """Среднее время выполнения задач (в часах) для конкретного пользователя по последним 5 задачам."""
     with _connect() as conn:
         rows = conn.execute(
             """SELECT created_at, completed_at FROM tasks
