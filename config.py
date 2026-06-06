@@ -8,11 +8,11 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN не найден в .env")
+    logger.warning("BOT_TOKEN не найден в .env — Telegram-бот не будет работать")
 
 SPEECH2TEXT_API_KEY: str = os.getenv("SPEECH2TEXT_API_KEY", "")
 if not SPEECH2TEXT_API_KEY:
-    raise ValueError("SPEECH2TEXT_API_KEY не найден в .env")
+    logger.warning("SPEECH2TEXT_API_KEY не найден в .env — распознавание речи недоступно")
 
 YOUGILE_TOKEN: str | None = os.getenv("YOUGILE_TOKEN")
 YOUGILE_BOARD_ID: str | None = os.getenv("YOUGILE_BOARD_ID")
@@ -22,15 +22,12 @@ if not YOUGILE_TOKEN:
 if not YOUGILE_BOARD_ID:
     logger.warning("YOUGILE_BOARD_ID не задан — создание задач в YouGile недоступно")
 
-# ID колонок YouGile (можно задать в .env)
-YOUGILE_TO_COLUMN_ID: str | None = os.getenv("YOUGILE_TO_COLUMN_ID")      # колонка "Сделать"
-YOUGILE_DO_COLUMN_ID: str | None = os.getenv("YOUGILE_DO_COLUMN_ID")      # колонка "В процессе"
-YOUGILE_DONE_COLUMN_ID: str | None = os.getenv("YOUGILE_DONE_COLUMN_ID")  # колонка "Готово"
+YOUGILE_TO_COLUMN_ID: str | None = os.getenv("YOUGILE_TO_COLUMN_ID")
+YOUGILE_DO_COLUMN_ID: str | None = os.getenv("YOUGILE_DO_COLUMN_ID")
+YOUGILE_DONE_COLUMN_ID: str | None = os.getenv("YOUGILE_DONE_COLUMN_ID")
 
-# URL веб-кабинета
 WEB_BASE_URL: str = os.getenv("WEB_BASE_URL", "http://localhost:8000")
 
-# YandexGPT
 YANDEX_FOLDER_ID: str | None = os.getenv("YANDEX_FOLDER_ID")
 YANDEX_API_KEY: str | None = os.getenv("YANDEX_API_KEY")
 
