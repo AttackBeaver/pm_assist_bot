@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Установка ffmpeg для работы с видео (webm, mp4 и т.д.)
+# Устанавливаем ffmpeg и системные зависимости для обработки видео/аудио
 RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
