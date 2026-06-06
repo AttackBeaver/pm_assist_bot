@@ -145,7 +145,7 @@ def add_task(
     # Проверка ачивки "Первая задача" (у автора)
     tasks = get_tasks_by_user(author_telegram_id)
     if len(tasks) == 1:
-        update_user_stats(author_telegram_id, achievements_to_add=["🏅 Первая задача"])
+        update_user_stats(author_telegram_id, achievements_to_add=["Первая задача"])
     # Запись в историю
     add_task_history(task_id, 'pending', comment='Задача создана')
 
@@ -204,10 +204,10 @@ def complete_task(task_id: str) -> None:
             (responsible_id,)
         ).fetchone()[0]
     if count >= 3:
-        new_achievements.append("⚡ Спринтер")
+        new_achievements.append("Спринтер")
     stats = get_user_stats(responsible_id)
     if stats["level"] >= 2:
-        new_achievements.append("🧙‍♂️ Мастер")
+        new_achievements.append("Мастер")
     if new_achievements:
         update_user_stats(responsible_id, achievements_to_add=new_achievements)
     # Запись в историю (при завершении через API вызовется из callback, здесь дублировать не нужно)

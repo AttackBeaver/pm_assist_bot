@@ -8,3 +8,6 @@ uvicorn
 python-multipart
 streamlit
 pandas
+playwright
+pyaudio
+numpy
