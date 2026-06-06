@@ -223,7 +223,7 @@ async def task_delete(task_id: str, telegram_id: int = Form(...)) -> RedirectRes
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "message": "PM Assist работает"}
+    return {"status": "ok", "message": "PM Assist web is alive"}
 
 @app.get("/ping")
 async def ping():
