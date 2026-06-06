@@ -6,3 +6,5 @@ sqlalchemy
 fastapi
 uvicorn
 python-multipart
+streamlit
+pandas

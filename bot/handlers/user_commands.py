@@ -12,7 +12,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
-from aiogram.utils.keyboard import InlineKeyboardBuilder   # <-- ДОБАВИТЬ
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import WEB_BASE_URL, YOUGILE_DO_COLUMN_ID, YOUGILE_DONE_COLUMN_ID, YOUGILE_TOKEN
 from web.database import (
@@ -26,7 +26,6 @@ router = Router()
 
 
 def _main_keyboard() -> ReplyKeyboardMarkup:
-    """Постоянная клавиатура с основными действиями."""
     return ReplyKeyboardMarkup(
         keyboard=[
             [
@@ -55,8 +54,13 @@ def _main_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def _cabinet_url_text(telegram_id: int) -> str:
+    """Возвращает строку с URL кабинета для вставки в текст сообщения."""
+    return f"{WEB_BASE_URL}?id={telegram_id}"
+
+
 def _cabinet_inline(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
-    url = f"{WEB_BASE_URL}/cabinet/{telegram_id}"
+    url = f"{WEB_BASE_URL}?id={telegram_id}"
     if "localhost" in WEB_BASE_URL or "127.0.0.1" in WEB_BASE_URL:
         return None
     return InlineKeyboardMarkup(inline_keyboard=[[
@@ -108,7 +112,7 @@ async def cmd_help(message: Message) -> None:
         reply_markup=_main_keyboard()
     )
 
-# ---------- Задачи ----------
+
 @router.message(Command("tasks"))
 @router.message(F.text == "📋 Мои задачи")
 async def cmd_tasks(message: Message) -> None:
@@ -134,7 +138,7 @@ async def cmd_tasks(message: Message) -> None:
 @router.message(Command("cabinet"))
 @router.message(F.text == "🌐 Личный кабинет")
 async def cmd_cabinet(message: Message) -> None:
-    cabinet_url = f"{WEB_BASE_URL}/cabinet/{message.from_user.id}"
+    cabinet_url = _cabinet_url_text(message.from_user.id)
     inline = _cabinet_inline(message.from_user.id)
     await message.answer(
         f"🌐 Личный кабинет — управление задачами:\n{cabinet_url}",
@@ -172,7 +176,6 @@ async def cmd_back(message: Message) -> None:
     )
 
 
-# ---------- Статистика, достижения, дедлайны ----------
 @router.message(Command("stats"))
 @router.message(F.text == "📊 Статистика")
 async def cmd_stats(message: Message) -> None:
@@ -247,11 +250,10 @@ async def cmd_deadlines(message: Message) -> None:
     await message.answer("\n".join(lines), parse_mode="Markdown", reply_markup=_main_keyboard())
 
 
-# ---------- Кнопка теста ----------
 @router.message(F.text == "🧪 Тест сценария")
 async def cmd_test_scenario(message: Message) -> None:
     uid = message.from_user.id
-    cabinet_url = f"{WEB_BASE_URL}/cabinet/{uid}"
+    cabinet_url = _cabinet_url_text(uid)
     await message.answer(
         f"🧪 **Демо-сценарий PM-Assist Bot**\n\n"
         "1. Добавьте меня в групповой чат, если ещё не сделали.\n"
@@ -267,11 +269,11 @@ async def cmd_test_scenario(message: Message) -> None:
         reply_markup=_main_keyboard()
     )
 
+
 @router.message(Command("recommendations"))
 @router.message(F.text == "📚 Рекомендации")
 async def cmd_recommendations(message: Message):
     uid = message.from_user.id
-    # Получаем все выполненные задачи пользователя
     tasks = get_tasks_by_user(uid, status="completed")
     if not tasks:
         await message.answer(
@@ -280,12 +282,9 @@ async def cmd_recommendations(message: Message):
         )
         return
 
-    # Анализируем тексты задач
     all_text = " ".join([t["title"].lower() for t in tasks])
-    
-    # Сопоставляем ключевые слова с курсами
     recommendations = []
-    
+
     if re.search(r'аналитик|анализ|отчет|отчёт|дашборд', all_text):
         recommendations.append("📊 Аналитика данных – курс 'Основы SQL и визуализация'")
     if re.search(r'python|код|программирование|скрипт', all_text):
@@ -298,15 +297,16 @@ async def cmd_recommendations(message: Message):
         recommendations.append("🐞 Тестирование – курс 'Основы QA и баг-трекинг'")
     if re.search(r'сервер|деплой|инфраструктура', all_text):
         recommendations.append("☁️ DevOps – курс 'Введение в CI/CD и контейнеризацию'")
-    
+
     if not recommendations:
         recommendations = [
             "🧠 Тайм-менеджмент – курс 'Как успевать больше'",
             "🎯 Постановка целей – курс 'SMART и OKR'"
         ]
-    
+
     answer = "📚 **Рекомендации по развитию:**\n\n" + "\n".join(recommendations)
     await message.answer(answer, parse_mode="Markdown", reply_markup=_main_keyboard())
+
 
 @router.message(Command("move"))
 async def cmd_move(message: Message):
@@ -324,8 +324,7 @@ async def cmd_move(message: Message):
     try:
         idx = int(args[1]) - 1
         column_name = ' '.join(args[2:]).lower()
-        
-        # Получаем активные задачи пользователя
+
         tasks = get_tasks_by_user(message.from_user.id, status="pending")
         if not tasks:
             await message.answer("✨ У вас нет активных задач.")
@@ -333,14 +332,13 @@ async def cmd_move(message: Message):
         if idx < 0 or idx >= len(tasks):
             await message.answer(f"❌ Задача с номером {idx+1} не найдена. Команда `/tasks` покажет актуальный список.", parse_mode="Markdown")
             return
-        
+
         task = tasks[idx]
         yougile_card_id = task.get("yougile_card_id")
         if not yougile_card_id:
             await message.answer("❌ У этой задачи нет карточки в YouGile.")
             return
-        
-        # Определяем ID колонки по названию
+
         if "процесс" in column_name or "do" in column_name:
             column_id = YOUGILE_DO_COLUMN_ID
         elif "готово" in column_name or "done" in column_name:
@@ -348,11 +346,10 @@ async def cmd_move(message: Message):
         else:
             await message.answer("❌ Неизвестная колонка. Доступные: `В процессе`, `Готово`", parse_mode="Markdown")
             return
-        
+
         client = YouGileClient(YOUGILE_TOKEN)
         success = client.move_task(yougile_card_id, column_id)
         if success:
-            # Если перемещаем в Готово – автоматически завершаем задачу локально
             if column_id == YOUGILE_DONE_COLUMN_ID:
                 complete_task(task["id"])
                 await message.answer(f"✅ Задача «{task['title']}» завершена и перемещена в «Готово».")
@@ -365,6 +362,7 @@ async def cmd_move(message: Message):
     except Exception as e:
         logger.error(f"Ошибка в /move: {e}")
         await message.answer("⚠️ Произошла ошибка при перемещении задачи.")
+
 
 @router.message(Command("complete"))
 async def cmd_complete(message: Message):
@@ -387,13 +385,13 @@ async def cmd_complete(message: Message):
         if idx < 0 or idx >= len(tasks):
             await message.answer(f"❌ Задача с номером {idx+1} не найдена.")
             return
-        
+
         task = tasks[idx]
         yougile_card_id = task.get("yougile_card_id")
         if not yougile_card_id:
             await message.answer("❌ У этой задачи нет карточки в YouGile.")
             return
-        
+
         client = YouGileClient(YOUGILE_TOKEN)
         success = client.move_task(yougile_card_id, YOUGILE_DONE_COLUMN_ID)
         if success:
