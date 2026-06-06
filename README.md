@@ -83,7 +83,7 @@
 | Управление задачами | [YouGile](https://yougile.com) API v2 |
 | Конфигурация | python-dotenv |
 | Хост | [bothost.ru](https://bothost.ru) |
-| Дополнительно | ffmpeg (извлечение аудио из видео) |
+| Дополнительно | ffmpeg (извлечение аудио из видео), playwright (автоматическое подключение к встречам) |
 
 ## Структура проекта
 
@@ -130,7 +130,8 @@ cd pm_assist_bot
 
 ```bash
 python -m venv venv
-venv\Scripts\activate
+source venv/bin/activate   # Linux/Mac
+venv\Scripts\activate      # Windows
 pip install -r requirements.txt
 ```
 
@@ -156,6 +157,7 @@ YANDEX_API_KEY=your_api_key
 
 # Веб‑кабинет (для локального запуска)
 WEB_BASE_URL=http://localhost:8000
+PORT=8000
 ```
 
 ### 4. Запустить бота
@@ -165,6 +167,64 @@ python main.py
 ```
 
 Веб‑кабинет автоматически запустится на порту, указанном в переменной `PORT` (по умолчанию 8000).
+
+## Docker-образ (для bothost.ru)
+
+Проект включает `Dockerfile`, который устанавливает все системные зависимости (ffmpeg, chromium, pulseaudio, playwright). Для корректной работы автоматического подключения к встречам требуется поддержка звукового loopback устройства на хост-машине.
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Установка системных зависимостей для Chromium, PulseAudio, ffmpeg и playwright
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    chromium \
+    chromium-driver \
+    pulseaudio \
+    pulseaudio-utils \
+    xvfb \
+    dbus-x11 \
+    procps \
+    portaudio19-dev \
+    python3-pyaudio \
+    libnss3 \
+    libx11-xcb1 \
+    libxcb1 \
+    libxcomposite1 \
+    libxcursor1 \
+    libxdamage1 \
+    libxi6 \
+    libxtst6 \
+    libxrandr2 \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
+    libgbm1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pactl load-module module-null-sink sink_name=virtual_sink 2>/dev/null || true
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+RUN pip install --no-cache-dir playwright && \
+    playwright install chromium && \
+    playwright install-deps
+
+RUN pip install --no-cache-dir python-multipart
+
+COPY . .
+
+ENV DATA_DIR=/app/data
+RUN mkdir -p /app/data && chmod 777 /app/data
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+
+CMD ["python", "main.py"]
+```
 
 ## Тестирование
 
