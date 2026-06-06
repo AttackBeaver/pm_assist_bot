@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 def extract_yadisk_direct_link(public_url: str) -> Optional[str]:
     """
     Извлекает прямую ссылку на скачивание для публичного файла на Яндекс.Диске.
+    Поддерживает ссылки вида:
+    - https://disk.yandex.ru/d/...
+    - https://disk.yandex.ru/i/...
+    - https://disk.yandex.ru/public/...
     Документация: https://yandex.ru/dev/disk/rest/public/resources-download.html
     """
     if not public_url:

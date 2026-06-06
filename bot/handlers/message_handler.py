@@ -1,5 +1,6 @@
 import logging
 import uuid
+import re
 from aiogram import Router, F, Bot
 from aiogram.types import Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -8,6 +9,7 @@ from bot.utils.parser import parse_task as regex_parse_task
 from bot.utils.llm_parser import parse_task_with_llm
 from bot.utils.date_utils import deadline_to_timestamp
 from bot.utils.yougile_utils import create_yougile_task
+from bot.utils.meet_utils import process_meet_link
 from web.database import add_user, add_task, get_telegram_id_by_username
 
 logger = logging.getLogger(__name__)
@@ -33,17 +35,21 @@ async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | Non
 
 @router.message(F.text, F.chat.type.in_({"group", "supergroup"}))
 async def handle_text_message(message: Message, bot: Bot) -> None:
+    # Проверяем, не ссылка ли это на Яндекс.Диск
+    yandex_link_match = re.search(r'(https?://disk\.yandex\.(?:ru|com)/(?:i|d|public)/[^\s]+)', message.text)
+    if yandex_link_match:
+        await process_meet_link(yandex_link_match.group(1), message, bot)
+        return
+
     # Регистрируем автора
     add_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
 
     # ----- ГИБРИДНЫЙ ПАРСИНГ -----
-    # 1) Пытаемся использовать YandexGPT
     llm_result = parse_task_with_llm(message.text)
     if llm_result and llm_result.get("confidence", 0) >= _CONFIDENCE_THRESHOLD:
         parse_result = llm_result
         logger.info(f"✅ Распознано через LLM: confidence={parse_result['confidence']}")
     else:
-        # 2) Fallback на regex-парсер
         parse_result = regex_parse_task(message.text, known_usernames=[])
         logger.info(f"🔄 Fallback на regex: confidence={parse_result['confidence']}")
 
@@ -85,7 +91,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
             chat_id=message.chat.id,
         )
 
-        # --- Отправка личных уведомлений ---
+        # --- Отправка личных уведомлений (как было ранее) ---
         if responsible_id == author_id:
             keyboard = InlineKeyboardBuilder()
             keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
