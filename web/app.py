@@ -1,7 +1,7 @@
 ﻿﻿import os
 import sys
 from html import escape
-from fastapi import FastAPI, Form, HTTPException
+from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 import logging
 
@@ -222,7 +222,6 @@ async def cabinet(telegram_id: int) -> HTMLResponse:
     if not achievements_html:
         achievements_html = '<div style="color: #999;">Пока нет достижений. Выполняйте задачи!</div>'
     
-    # Расширенная аналитика
     on_time_rate = get_on_time_completion_rate(telegram_id)
     avg_progress_time = get_average_time_in_progress(telegram_id) or 0.0
     status_counts = get_task_status_counts(telegram_id)
@@ -253,7 +252,6 @@ async def task_complete(task_id: str, telegram_id: int = Form(...)) -> RedirectR
     task = get_task_by_id(task_id)
     if not task:
         return RedirectResponse(url=f"/cabinet/{telegram_id}?error=not_found", status_code=303)
-    # Проверка прав: только ответственный или автор могут выполнить
     if task["responsible_telegram_id"] != telegram_id and task["author_telegram_id"] != telegram_id:
         return RedirectResponse(url=f"/cabinet/{telegram_id}?error=forbidden", status_code=303)
     
@@ -277,7 +275,6 @@ async def task_delete(task_id: str, telegram_id: int = Form(...)) -> RedirectRes
     task = get_task_by_id(task_id)
     if not task:
         return RedirectResponse(url=f"/cabinet/{telegram_id}?error=not_found", status_code=303)
-    # Проверка прав: только автор может удалить
     if task["author_telegram_id"] != telegram_id:
         return RedirectResponse(url=f"/cabinet/{telegram_id}?error=forbidden", status_code=303)
     
