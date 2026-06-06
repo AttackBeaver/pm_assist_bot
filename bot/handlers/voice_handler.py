@@ -42,7 +42,10 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
         file_path = await download_telegram_audio(message, bot)
         transcribed_text = transcribe_audio(file_path)
         if not transcribed_text:
-            await status_msg.edit_text("❌ Не удалось распознать речь.")
+            await status_msg.edit_text(
+                "❌ Не удалось распознать речь. Сервис временно недоступен. "
+                "Пожалуйста, напишите задачу текстом."
+            )
             return
 
         # ----- ГИБРИДНЫЙ ПАРСИНГ -----

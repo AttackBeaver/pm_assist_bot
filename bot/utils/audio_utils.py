@@ -12,7 +12,7 @@ from config import SPEECH2TEXT_API_KEY
 logger = logging.getLogger(__name__)\
 
 
-_STT_TIMEOUT = 120  # секунд
+_STT_TIMEOUT = 300  # секунд
 
 
 async def download_telegram_audio(message: Message, bot: Bot) -> str:
