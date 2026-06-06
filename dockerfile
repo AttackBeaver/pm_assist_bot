@@ -2,12 +2,26 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Устанавливаем ffmpeg и системные зависимости для обработки видео/аудио
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    chromium \
+    chromium-driver \
+    pulseaudio \
+    pulseaudio-utils \
+    xvfb \
+    dbus-x11 \
+    procps \
+    portaudio19-dev \
+    python3-pyaudio \
+    && rm -rf /var/lib/apt/lists/*
+
+# Загружаем модуль loopback для захвата системного звука (может потребоваться запуск pulseaudio)
+RUN pactl load-module module-null-sink sink_name=virtual_sink 2>/dev/null || true
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir python-multipart
+RUN pip install --no-cache-dir python-multipart playwright && \
+    playwright install chromium
 
 COPY . .
 

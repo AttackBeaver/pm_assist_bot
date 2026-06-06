@@ -17,7 +17,7 @@ from web.database import add_user, add_task, get_telegram_id_by_username
 
 logger = logging.getLogger(__name__)
 router = Router()
-_CONFIDENCE_THRESHOLD = 50
+_CONFIDENCE_THRESHOLD = 70
 _MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 МБ для Telegram-файлов
 
 

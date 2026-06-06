@@ -1,5 +1,7 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta
+import os
 import re
 from typing import Optional
 
@@ -20,6 +22,16 @@ from web.database import (
     get_tasks_by_user, get_user_stats, get_average_completion_time
 )
 from yougile_client import YouGileClient
+
+from bot.utils.meet_automation import join_and_record_meet
+from bot.utils.audio_utils import transcribe_media
+from bot.utils.llm_parser import parse_task_with_llm
+from bot.utils.date_utils import deadline_to_timestamp
+from bot.utils.yougile_utils import create_yougile_task
+from web.database import add_task, get_telegram_id_by_username, add_user
+import uuid
+import tempfile
+from bot.utils.parser import parse_task as regex_parse_task
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -126,6 +138,7 @@ async def cmd_help(message: Message) -> None:
         "/away [причина] — временно отключить назначение задач\n"
         "/back — снова доступен для задач\n"
         "/meet — инструкция по загрузке записи встречи\n",
+        "/join_meet <ссылка> [секунды] — автоматически подключиться к Яндекс Телемосту и записать встречу\n",
         parse_mode="Markdown",
         reply_markup=_main_keyboard()
     )
@@ -422,3 +435,94 @@ async def cmd_complete(message: Message):
     except Exception as e:
         logger.error(f"Ошибка в /complete: {e}")
         await message.answer("⚠️ Произошла ошибка при завершении задачи.")
+
+@router.message(Command("join_meet"))
+async def cmd_join_meet(message: Message):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer(
+            "ℹ️ Используйте: `/join_meet <ссылка_на_телемост> [длительность_в_секундах]`\n"
+            "Пример: `/join_meet https://telemost.yandex.ru/... 120`\n\n"
+            "⚠️ Функция требует наличия PulseAudio и loopback-модуля в Docker-контейнере.",
+            parse_mode="Markdown"
+        )
+        return
+    meet_url = args[1]
+    duration = 60  # по умолчанию 1 минута
+    if len(args) > 2 and args[2].isdigit():
+        duration = int(args[2])
+    await message.answer(f"🤖 Подключаюсь к встрече `{meet_url}` на {duration} секунд. Это может занять до минуты...", parse_mode="Markdown")
+    # Запускаем асинхронную задачу
+    asyncio.create_task(process_auto_meet(meet_url, duration, message, message.bot))
+
+async def process_auto_meet(meet_url: str, duration: int, original_message: Message, bot):
+    chat_id = original_message.chat.id
+    user_id = original_message.from_user.id
+    temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
+    try:
+        await original_message.answer("🎧 Подключаюсь и начинаю запись...")
+        success = await join_and_record_meet(meet_url, duration, temp_wav)
+        if not success:
+            await bot.send_message(chat_id, "❌ Не удалось захватить звук. Возможно, модуль loopback PulseAudio не загружен или нет прав.")
+            return
+        # Транскрибация
+        await original_message.answer("🔊 Распознаю речь...")
+        transcribed_text = transcribe_media(temp_wav)
+        if not transcribed_text:
+            await bot.send_message(chat_id, "❌ Не удалось распознать речь в записи.")
+            return
+        # Парсинг задач
+        parse_result = parse_task_with_llm(transcribed_text)
+        if not parse_result or parse_result.get("confidence", 0) < 50:
+            parse_result = regex_parse_task(transcribed_text, known_usernames=[])
+        if not parse_result or parse_result.get("confidence", 0) < 50:
+            await bot.send_message(chat_id, "🔊 Не удалось выделить задачи. Возможно, встреча не содержала задач.")
+            return
+        # Создание карточек
+        assignee_usernames = parse_result.get("assignees", [])
+        if not assignee_usernames:
+            assignee_usernames = [None]
+        author_id = user_id
+        created_tasks = []
+        for assignee in assignee_usernames:
+            responsible_id = author_id
+            if assignee:
+                clean = assignee.lstrip('@')
+                found_id = get_telegram_id_by_username(clean)
+                if found_id:
+                    responsible_id = found_id
+            card_id = await create_yougile_task(
+                title=parse_result["task"],
+                description=transcribed_text,
+                deadline_str=parse_result["deadline"],
+            )
+            if card_id:
+                task_uuid = str(uuid.uuid4())
+                add_task(
+                    task_id=task_uuid,
+                    title=parse_result["task"],
+                    description=transcribed_text,
+                    responsible_telegram_id=responsible_id,
+                    author_telegram_id=author_id,
+                    deadline=parse_result["deadline"],
+                    deadline_timestamp=deadline_to_timestamp(parse_result["deadline"]) if parse_result["deadline"] else None,
+                    yougile_card_id=card_id,
+                    chat_id=chat_id,
+                )
+                created_tasks.append((parse_result["task"], assignee))
+        # Формируем ответ
+        tasks_summary = "\n".join([f"• {t[0]} (ответственный: {t[1] or 'не назначен'})" for t in created_tasks]) if created_tasks else "—"
+        reply = (
+            f"🎤 **Встреча обработана!**\n\n"
+            f"📝 **Задача:** {parse_result['task']}\n"
+            f"⏰ **Дедлайн:** {parse_result['deadline'] or 'не указан'}\n"
+            f"👥 **Ответственные:** {', '.join(assignee_usernames) if assignee_usernames else 'не назначены'}\n\n"
+            f"✅ **Создано карточек в YouGile:** {len(created_tasks)}"
+        )
+        await bot.send_message(chat_id, reply, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Ошибка в process_auto_meet: {e}")
+        await bot.send_message(chat_id, f"⚠️ Произошла ошибка: {str(e)}")
+    finally:
+        if os.path.exists(temp_wav):
+            os.remove(temp_wav)

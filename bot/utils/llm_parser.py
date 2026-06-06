@@ -1,9 +1,11 @@
 import json
 import logging
+import re
 import requests
 from typing import Optional, Dict, Any
 
 from config import YANDEX_FOLDER_ID, YANDEX_API_KEY
+from bot.utils.parser import _TASK_KEYWORDS, _STOP_WORDS
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,6 @@ class YandexGPTClient:
                 logger.error(f"Ошибка YandexGPT API: {response.status_code} - {response.text}")
                 return None
             data = response.json()
-            # Извлекаем текст ответа
             result = data.get("result", {}).get("alternatives", [{}])[0].get("message", {}).get("text")
             return result
         except Exception as e:
@@ -63,13 +64,13 @@ def parse_task_with_llm(text: str) -> Optional[Dict[str, Any]]:
     if not client:
         return None
 
-    # Быстрая эвристика: если в сообщении нет ключевых слов, возможно, это не задача
-    # Но мы всё равно спросим LLM, потом проверим
+    # НОВЫЙ СИСТЕМНЫЙ ПРОМПТ (более строгий)
     system_prompt = """
-Ты — ассистент по управлению задачами. Из текста сообщения извлеки задачу, дедлайн и ответственных (Имена, пользователи телеграмм (@username), электронные почты).
-Если сообщение не содержит задачи (например, просто "привет", "проверка", "как дела"), верни {"task": null, "deadline": null, "assignees": []}.
-Проверяй найденные тобой задачи на логику, возможно это обычное сообщение, а не задача.
-Верни ответ только в формате JSON.
+Ты — ассистент по управлению задачами. Из текста сообщения извлеки задачу, дедлайн и ответственных.
+Правила:
+- Если сообщение является вопросом (содержит вопросительные слова: зачем, почему, где, как, кто, когда или знак вопроса), шуткой, приветствием, пустым, бессмысленным или не содержит явного указания на действие (сделать, подготовить, отправить, создать, обновить, проверить, организовать, купить, заказать и т.п.), то верни {"task": null, "deadline": null, "assignees": []}.
+- Если сообщение содержит стоп-слова (список: привет, пока, как дела, спасибо, отправь файлы и т.п.) – тоже возвращай null.
+- Ответ должен быть только в формате JSON, без дополнительных комментариев.
 """
     prompt = f"Сообщение: {text}"
     response = client.generate_text(prompt, system_prompt=system_prompt)
@@ -85,20 +86,29 @@ def parse_task_with_llm(text: str) -> Optional[Dict[str, Any]]:
         if not isinstance(assignees, list):
             assignees = [assignees] if assignees else []
 
-        # ---- ПОСТ-ВАЛИДАЦИЯ ----
-        # Если задача пустая или очень короткая (<5 символов), отбрасываем
+        # ----- ПОСТ-ВАЛИДАЦИЯ (ужесточённая) -----
+        # 1. Проверка на пустую задачу
         if not task or len(task.strip()) < 5:
             return None
-        # Если в исходном сообщении нет ключевых слов и нет дедлайна, а LLM придумал задачу – отбрасываем
-        from bot.utils.parser import _TASK_KEYWORDS  # временно импортируем для проверки
-        import re
-        has_keyword = any(re.search(rf'\b{kw}\b', text.lower()) for kw in _TASK_KEYWORDS)
-        if not has_keyword and not deadline and not assignees:
-            # Слово "проверка" не является ключевым, но LLM мог принять его за задачу
-            # Дополнительная проверка: если сообщение не содержит глаголов действия
-            action_words = ["сделать", "подготовить", "написать", "обновить", "проверить", "отправить", "создать"]
-            if not any(word in text.lower() for word in action_words):
+
+        # 2. Проверка на наличие стоп-слов в исходном тексте
+        lower_text = text.lower()
+        for sw in _STOP_WORDS:
+            if re.search(rf'\b{re.escape(sw)}\b', lower_text):
+                logger.info(f"Сообщение содержит стоп-слово '{sw}' – игнорируем")
                 return None
+
+        # 3. Проверка на вопрос (без ключевых слов)
+        has_question = bool(re.search(r'[?؟]|\b(?:когда|зачем|почему|где|что за|как|кто)\b', lower_text))
+        has_keyword = any(re.search(rf'\b{kw}\b', lower_text) for kw in _TASK_KEYWORDS)
+        if has_question and not has_keyword and not deadline and not assignees:
+            logger.info("Сообщение является вопросом без ключевых слов – игнорируем")
+            return None
+
+        # 4. Если задача слишком общая и не содержит глаголов действия
+        action_words = ["сделать", "подготовить", "написать", "обновить", "проверить", "отправить", "создать", "организовать"]
+        if not any(word in task.lower() for word in action_words) and len(task.split()) <= 3:
+            return None
 
         return {
             "task": task,

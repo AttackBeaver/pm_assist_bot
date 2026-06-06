@@ -14,7 +14,7 @@ from web.database import add_user, add_task, get_telegram_id_by_username
 
 logger = logging.getLogger(__name__)
 router = Router()
-_CONFIDENCE_THRESHOLD = 50
+_CONFIDENCE_THRESHOLD = 70
 
 
 async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | None:

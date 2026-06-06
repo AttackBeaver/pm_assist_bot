@@ -25,7 +25,13 @@ _STOP_WORDS = frozenset([
     "отправь файлы", "скинь файл", "пришли файл", "открой", "закрой",
     "помощь", "help", "инструкция", "правила", "как пользоваться",
     "просто сообщение", "без задач", "без упоминаний",
+    "шаблон", "дизайн", "использовать", "обязательно", "просто",
+    "все подряд", "?))", ")))", "??", "?)", "ладно", "окей", "ок",
+    "ага", "да ну", "неужели", "правда", "интересно", "понятно"
 ])
+
+# Вопросительные паттерны (если вопрос и нет ключевых слов)
+_QUESTION_PATTERNS = re.compile(r'[?؟]|\b(?:когда|зачем|почему|где|что за)\b', re.IGNORECASE)
 
 
 def parse_task(text: str, known_usernames: list[str]) -> dict:
@@ -44,14 +50,20 @@ def parse_task(text: str, known_usernames: list[str]) -> dict:
 
     has_keyword = any(re.search(rf'\b{kw}\b', text_lower) for kw in _TASK_KEYWORDS)
     has_stopword = any(re.search(rf'\b{sw}\b', text_lower) for sw in _STOP_WORDS)
+    has_question = _QUESTION_PATTERNS.search(text_lower) is not None
     has_deadline = deadline is not None
     has_assignee = len(assignees) > 0
     task_length = len(task)
     word_count = len(text_lower.split())
 
+    # Если есть стоп-слово – точно не задача
     if has_stopword:
         confidence = 0
+    # Если сообщение очень короткое и нет ключевых слов, дедлайна, ответственных
     elif word_count <= 3 and not has_keyword and not has_deadline and not has_assignee:
+        confidence = 0
+    # Если это вопрос и нет ключевых слов (например, «Это шаблон?»)
+    elif has_question and not has_keyword and not has_deadline and not has_assignee:
         confidence = 0
     elif not has_keyword and not has_deadline and not has_assignee:
         confidence = 0
