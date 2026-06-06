@@ -68,6 +68,34 @@ def extract_audio_from_video(video_path: str, output_audio_path: str) -> bool:
         logger.error(f"Ошибка извлечения аудио: {e}")
         return False
 
+async def download_telegram_media(message: Message, bot: Bot) -> str:
+    file_obj = message.voice or message.audio or message.video or message.video_note or message.document
+    if not file_obj:
+        raise ValueError("В сообщении нет голосового, аудио, видео или документа")
+
+    # Для документа используем file_obj напрямую
+    file_info = await bot.get_file(file_obj.file_id)
+
+    if message.document:
+        ext = message.document.file_name.split('.')[-1]
+    elif message.video_note:
+        ext = "mp4"
+    elif message.video:
+        original_name = getattr(file_obj, "file_name", "") or ""
+        ext = original_name.rsplit(".", 1)[-1] if "." in original_name else "mp4"
+    elif message.audio:
+        original_name = getattr(file_obj, "file_name", "") or ""
+        ext = original_name.rsplit(".", 1)[-1] if "." in original_name else "mp3"
+    else:
+        ext = "ogg"
+
+    temp_path = os.path.join(tempfile.gettempdir(), f"tg_media_{message.message_id}.{ext}")
+    file_bytes_io = await bot.download_file(file_info.file_path)
+    with open(temp_path, "wb") as f:
+        f.write(file_bytes_io.getvalue())
+
+    logger.info(f"Медиа сохранено: {temp_path}")
+    return temp_path
 
 def convert_audio_format(input_path: str, output_ext: str = "mp3") -> str:
     """Конвертирует аудио в поддерживаемый формат (mp3). Возвращает путь к новому файлу."""

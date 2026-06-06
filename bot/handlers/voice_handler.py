@@ -32,9 +32,16 @@ async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | Non
     return None
 
 
-@router.message(F.voice | F.audio | F.video)
+@router.message(F.voice | F.audio | F.video | F.video_note | F.document)
 async def handle_media_message(message: Message, bot: Bot) -> None:
     add_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
+
+    # Для документов проверяем расширение файла
+    if message.document:
+        ext = message.document.file_name.split('.')[-1].lower()
+        if ext not in ['webm', 'mp4', 'ogg', 'mp3', 'wav', 'aac', 'wma', 'avi', 'mov', 'mkv']:
+            await message.answer("❌ Неподдерживаемый формат файла. Отправьте видео (webm, mp4) или аудио (mp3, ogg, wav).")
+            return
 
     status_msg = await message.answer("🎙 Обрабатываю медиафайл (это может занять несколько минут)...")
     file_path = None
