@@ -9,7 +9,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from web.database import (
     get_tasks_by_user, complete_task, delete_task, get_user_stats,
-    get_average_completion_time, get_task_by_id
+    get_average_completion_time, get_task_by_id,
+    get_on_time_completion_rate, get_average_time_in_progress, get_task_status_counts
 )
 from yougile_client import YouGileClient
 from config import YOUGILE_TOKEN, YOUGILE_DONE_COLUMN_ID, YOUGILE_BOARD_ID
@@ -80,6 +81,32 @@ _HTML_TEMPLATE = """\
         }}
         .achievements-title {{ font-size: 18px; margin-bottom: 10px; color: #333; }}
         .user-level {{ display: inline-block; margin-left: 20px; padding: 5px 15px; background: #667eea; color: white; border-radius: 20px; }}
+        .analytics-block {{
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }}
+        .analytics-title {{
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }}
+        .stats-mini {{
+            display: flex;
+            gap: 20px;
+            margin-bottom: 10px;
+        }}
+        .stat-mini .stat-value {{
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+        }}
+        .status-distribution {{
+            display: flex;
+            gap: 15px;
+            font-size: 14px;
+        }}
     </style>
 </head>
 <body>
@@ -97,6 +124,16 @@ _HTML_TEMPLATE = """\
         <div class="stat-card"><div class="stat-number">{pending}</div><div class="stat-label">В работе</div></div>
         <div class="stat-card"><div class="stat-number">{completed}</div><div class="stat-label">Выполнено</div></div>
         <div class="stat-card"><div class="stat-number">{avg_time}</div><div class="stat-label">Среднее время, ч</div></div>
+    </div>
+    <div class="analytics-block">
+        <div class="analytics-title">📈 Аналитика эффективности</div>
+        <div class="stats-mini">
+            <div class="stat-mini"><span class="stat-value">{on_time_rate:.1f}%</span> задач выполнено в срок</div>
+            <div class="stat-mini"><span class="stat-value">{avg_progress_time:.1f} ч</span> среднее время в работе</div>
+        </div>
+        <div class="status-distribution">
+            {status_distribution_html}
+        </div>
     </div>
     <div class="achievements-block">
         <div class="achievements-title">🏆 Достижения</div>
@@ -153,7 +190,7 @@ def _build_tasks_table(tasks: list, telegram_id: int) -> str:
         '<table class="task-table">'
         "<thead><tr>"
         "<th>Задача</th><th>Описание</th><th>Дедлайн</th><th>Статус</th><th>Действия</th>"
-        "</tr></thead>"
+        "<tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"
         "</table>"
     )
@@ -184,6 +221,16 @@ async def cabinet(telegram_id: int) -> HTMLResponse:
                              f'<div style="font-size: 12px;">{ach}</div></div>'
     if not achievements_html:
         achievements_html = '<div style="color: #999;">Пока нет достижений. Выполняйте задачи!</div>'
+    
+    # Расширенная аналитика
+    on_time_rate = get_on_time_completion_rate(telegram_id)
+    avg_progress_time = get_average_time_in_progress(telegram_id) or 0.0
+    status_counts = get_task_status_counts(telegram_id)
+    pending_count = status_counts.get("pending", 0)
+    completed_count = status_counts.get("completed", 0)
+    in_progress_count = status_counts.get("in_progress", 0)  # если есть, иначе 0
+    status_distribution_html = f'<span>🟡 В работе: {in_progress_count}</span> <span>🟢 Выполнено: {completed_count}</span> <span>⚪ Ожидают: {pending_count}</span>'
+    
     return HTMLResponse(
         _HTML_TEMPLATE.format(
             telegram_id=telegram_id,
@@ -194,7 +241,10 @@ async def cabinet(telegram_id: int) -> HTMLResponse:
             xp=xp,
             level=level,
             achievements_html=achievements_html,
-            tasks_table=_build_tasks_table(tasks, telegram_id)
+            tasks_table=_build_tasks_table(tasks, telegram_id),
+            on_time_rate=on_time_rate,
+            avg_progress_time=avg_progress_time,
+            status_distribution_html=status_distribution_html
         )
     )
 

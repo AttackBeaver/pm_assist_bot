@@ -43,6 +43,14 @@ def init_db() -> None:
             tasks_completed INTEGER DEFAULT 0,
             tasks_created INTEGER DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS task_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            status_from TEXT,
+            status_to TEXT NOT NULL,
+            changed_at TEXT NOT NULL,
+            comment TEXT
+        );
         ''')
         # Миграции
         try:
@@ -61,6 +69,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE user_stats ADD COLUMN tasks_created INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+        # Индекс для истории
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_task_history_task_id ON task_history(task_id)")
 
 @contextmanager
 def _connect() -> Generator[sqlite3.Connection, None, None]:
@@ -101,6 +111,14 @@ def get_pending_user_ids() -> List[int]:
         rows = conn.execute("SELECT DISTINCT responsible_telegram_id FROM tasks WHERE status = 'pending'").fetchall()
         return [row["responsible_telegram_id"] for row in rows]
 
+# --- История задач ---
+def add_task_history(task_id: str, status_to: str, status_from: str = None, comment: str = None) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO task_history (task_id, status_from, status_to, changed_at, comment) VALUES (?, ?, ?, ?, ?)",
+            (task_id, status_from, status_to, datetime.now().isoformat(), comment)
+        )
+
 # --- Задачи ---
 def add_task(
     task_id: str,
@@ -128,6 +146,8 @@ def add_task(
     tasks = get_tasks_by_user(author_telegram_id)
     if len(tasks) == 1:
         update_user_stats(author_telegram_id, achievements_to_add=["🏅 Первая задача"])
+    # Запись в историю
+    add_task_history(task_id, 'pending', comment='Задача создана')
 
 def get_tasks_by_user(telegram_id: int, status: Optional[str] = None) -> List[Dict[str, Any]]:
     with _connect() as conn:
@@ -190,10 +210,14 @@ def complete_task(task_id: str) -> None:
         new_achievements.append("🧙‍♂️ Мастер")
     if new_achievements:
         update_user_stats(responsible_id, achievements_to_add=new_achievements)
+    # Запись в историю (при завершении через API вызовется из callback, здесь дублировать не нужно)
 
 def delete_task(task_id: str) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    # Удаляем также историю перемещений (опционально)
+    with _connect() as conn:
+        conn.execute("DELETE FROM task_history WHERE task_id = ?", (task_id,))
 
 def get_average_completion_time(telegram_id: int) -> Optional[float]:
     with _connect() as conn:
@@ -270,3 +294,64 @@ def get_telegram_id_by_username(username: str) -> Optional[int]:
             "SELECT telegram_id FROM users WHERE username = ?", (username,)
         ).fetchone()
         return row["telegram_id"] if row else None
+
+# --- Расширенный трекинг скорости и качества ---
+def get_on_time_completion_rate(telegram_id: int) -> float:
+    """Процент задач, выполненных до или в день дедлайна."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT deadline_timestamp, completed_at FROM tasks WHERE responsible_telegram_id = ? AND status = 'completed' AND deadline_timestamp IS NOT NULL",
+            (telegram_id,)
+        ).fetchall()
+    if not rows:
+        return 0.0
+    on_time = 0
+    for row in rows:
+        deadline_ts = row["deadline_timestamp"] / 1000
+        try:
+            completed_ts = datetime.fromisoformat(row["completed_at"]).timestamp()
+        except (TypeError, ValueError):
+            continue
+        if completed_ts <= deadline_ts:
+            on_time += 1
+    return (on_time / len(rows)) * 100
+
+def get_average_time_in_progress(telegram_id: int) -> Optional[float]:
+    """Среднее время в статусе 'in_progress' (часы)."""
+    with _connect() as conn:
+        # Получаем ID задач пользователя
+        task_ids = conn.execute(
+            "SELECT id FROM tasks WHERE responsible_telegram_id = ? AND status = 'completed'",
+            (telegram_id,)
+        ).fetchall()
+    if not task_ids:
+        return None
+    total_hours = 0.0
+    count = 0
+    for t in task_ids:
+        task_id = t["id"]
+        # Находим время перехода в 'in_progress'
+        entry = conn.execute(
+            "SELECT changed_at FROM task_history WHERE task_id = ? AND status_to = 'in_progress' ORDER BY changed_at ASC LIMIT 1",
+            (task_id,)
+        ).fetchone()
+        # Находим время перехода в 'completed' (или следующий статус)
+        exit_ = conn.execute(
+            "SELECT changed_at FROM task_history WHERE task_id = ? AND status_to = 'completed' ORDER BY changed_at ASC LIMIT 1",
+            (task_id,)
+        ).fetchone()
+        if entry and exit_:
+            entry_time = datetime.fromisoformat(entry["changed_at"])
+            exit_time = datetime.fromisoformat(exit_["changed_at"])
+            total_hours += (exit_time - entry_time).total_seconds() / 3600
+            count += 1
+    return total_hours / count if count > 0 else None
+
+def get_task_status_counts(telegram_id: int) -> Dict[str, int]:
+    """Возвращает количество задач по статусам для пользователя."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) as cnt FROM tasks WHERE responsible_telegram_id = ? GROUP BY status",
+            (telegram_id,)
+        ).fetchall()
+    return {row["status"]: row["cnt"] for row in rows}

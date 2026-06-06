@@ -8,7 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from yougile_client import YouGileClient
 from config import YOUGILE_TOKEN, WEB_BASE_URL, YOUGILE_DO_COLUMN_ID, YOUGILE_DONE_COLUMN_ID
-from web.database import get_task_by_id, delete_task, complete_task
+from web.database import get_task_by_id, delete_task, complete_task, add_task_history
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -95,6 +95,8 @@ async def move_to_do_callback(callback: CallbackQuery):
         client = YouGileClient(YOUGILE_TOKEN)
         success = client.move_task(yougile_card_id, YOUGILE_DO_COLUMN_ID)
         if success:
+            # Запись в историю перемещения в работу
+            add_task_history(task_id, 'in_progress', status_from='pending', comment='Перемещено в работу')
             await callback.answer("Задача перемещена в колонку «В процессе»")
             await callback.message.edit_text("✅ Задача перемещена в работу!")
         else:
@@ -116,6 +118,12 @@ async def complete_task_callback(callback: CallbackQuery):
         client = YouGileClient(YOUGILE_TOKEN)
         success = client.move_task(yougile_card_id, YOUGILE_DONE_COLUMN_ID)
         if success:
+            # Запись в историю завершения (если задача была в работе, то from='in_progress', иначе from='pending')
+            status_from = task.get("status")
+            if status_from == 'pending':
+                add_task_history(task_id, 'completed', status_from='pending', comment='Завершено сразу')
+            else:
+                add_task_history(task_id, 'completed', status_from=status_from, comment='Завершено')
             complete_task(task_id)
             await callback.answer("Задача завершена!")
             await callback.message.edit_text("✅ Задача выполнена и перемещена в «Готово»")
