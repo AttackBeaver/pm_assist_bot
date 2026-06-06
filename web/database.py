@@ -5,9 +5,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
-DB_PATH = Path(__file__).parent / "tasks.db"
+import os
+DB_PATH = Path(os.getenv("DATA_DIR", Path(__file__).parent)) / "tasks.db"
 
 def init_db() -> None:
+    db_dir = DB_PATH.parent
+    db_dir.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
         conn.executescript('''
         CREATE TABLE IF NOT EXISTS tasks (

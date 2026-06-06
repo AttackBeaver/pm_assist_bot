@@ -9,7 +9,8 @@ from aiogram.types import Message
 from speech2text_client import Speech2TextClient
 from config import SPEECH2TEXT_API_KEY
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)\
+
 
 _STT_TIMEOUT = 120  # секунд
 
@@ -24,7 +25,7 @@ async def download_telegram_audio(message: Message, bot: Bot) -> str:
         raise ValueError("В сообщении нет голосового или аудио файла")
 
     file_info = await bot.get_file(file_obj.file_id)
-
+    
     if message.voice:
         ext = "ogg"
     else:
@@ -38,7 +39,7 @@ async def download_telegram_audio(message: Message, bot: Bot) -> str:
     file_bytes_io = await bot.download_file(file_info.file_path)
     with open(temp_path, "wb") as f:
         f.write(file_bytes_io.getvalue())
-
+    
     logger.info(f"Аудио сохранено: {temp_path}")
     return temp_path
 

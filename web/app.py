@@ -227,6 +227,6 @@ async def health() -> dict:
 
 if __name__ == "__main__":
     import uvicorn
-    print("🚀 Запуск личного кабинета PM Assist")
-    print("📱 Откройте в браузере: http://localhost:8000/cabinet/YOUR_TELEGRAM_ID")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", 8000))
+    print(f"🚀 Запуск личного кабинета на порту {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)

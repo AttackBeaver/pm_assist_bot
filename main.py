@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+from threading import Thread
 from aiogram import Bot, Dispatcher
 
 from config import BOT_TOKEN
@@ -14,6 +16,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def run_web():
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("web.app:app", host="0.0.0.0", port=port, log_level="info")
+
+
 async def main() -> None:
     bot = Bot(token=BOT_TOKEN)
     await bot.delete_webhook(drop_pending_updates=True)
@@ -24,6 +32,9 @@ async def main() -> None:
     dp.include_router(callbacks.router)
 
     logger.info("Запуск PM-Assist Bot...")
+
+    # Запуск веб-сервера в отдельном потоке
+    Thread(target=run_web, daemon=True).start()
 
     async with asyncio.TaskGroup() as tg:
         tg.create_task(reminder_worker(bot))
