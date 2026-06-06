@@ -86,22 +86,22 @@ def _cabinet_inline(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
     ]])
 
 
-# ---------- Обработчик встречи ----------
-@router.message(Command("meet"))
-@router.message(F.text == "📞 Встреча")
-async def cmd_meet(message: Message) -> None:
-    await message.answer(
-        "📢 **Расшифровка встречи**\n\n"
-        "Вы можете отправить мне:\n"
-        "• Голосовое сообщение\n"
-        "• Аудиофайл (MP3, OGG, WAV)\n"
-        "• Видеофайл (WEBM, MP4, AVI, MOV)\n"
-        "• **Публичную ссылку на Яндекс.Диск** с записью встречи\n\n"
-        "Я распознаю речь, выделю задачи, дедлайны и ответственных, и создам карточки в YouGile.\n\n"
-        "⚠️ **Важно:** Telegram не позволяет обрабатывать файлы >20 МБ. Для больших файлов используйте ссылку на Яндекс.Диск.",
-        parse_mode="Markdown",
-        reply_markup=_main_keyboard()
-    )
+# # ---------- Обработчик встречи ----------
+# @router.message(Command("meet"))
+# @router.message(F.text == "📞 Встреча")
+# async def cmd_meet(message: Message) -> None:
+#     await message.answer(
+#         "📢 **Расшифровка встречи**\n\n"
+#         "Вы можете отправить мне:\n"
+#         "• Голосовое сообщение\n"
+#         "• Аудиофайл (MP3, OGG, WAV)\n"
+#         "• Видеофайл (WEBM, MP4, AVI, MOV)\n"
+#         "• **Публичную ссылку на Яндекс.Диск** с записью встречи\n\n"
+#         "Я распознаю речь, выделю задачи, дедлайны и ответственных, и создам карточки в YouGile.\n\n"
+#         "⚠️ **Важно:** Telegram не позволяет обрабатывать файлы >20 МБ. Для больших файлов используйте ссылку на Яндекс.Диск.",
+#         parse_mode="Markdown",
+#         reply_markup=_main_keyboard()
+#     )
 
 # ---------- Основные команды ----------
 @router.message(Command("start"))
@@ -143,7 +143,7 @@ async def cmd_help(message: Message) -> None:
         "🛠 Настройки:\n"
         "/away [причина] — временно отключить назначение задач\n"
         "/back — снова доступен для задач\n"
-        "/meet — инструкция по загрузке записи встречи\n",
+        # "/meet — инструкция по загрузке записи встречи\n",
         "/join_meet <ссылка> [секунды] — автоматически подключиться к Яндекс Телемосту и записать встречу\n",
         parse_mode="Markdown",
         reply_markup=_main_keyboard()
