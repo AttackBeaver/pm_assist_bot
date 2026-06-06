@@ -4,7 +4,7 @@ from aiogram import Router, F, Bot
 from aiogram.types import Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.utils.audio_utils import download_telegram_audio, transcribe_audio, cleanup_temp_file
+from bot.utils.audio_utils import download_telegram_media, transcribe_media, cleanup_temp_file
 from bot.utils.parser import parse_task as regex_parse_task
 from bot.utils.llm_parser import parse_task_with_llm
 from bot.utils.date_utils import deadline_to_timestamp
@@ -32,15 +32,15 @@ async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | Non
     return None
 
 
-@router.message(F.voice | F.audio)
-async def handle_voice_message(message: Message, bot: Bot) -> None:
+@router.message(F.voice | F.audio | F.video)
+async def handle_media_message(message: Message, bot: Bot) -> None:
     add_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
 
-    status_msg = await message.answer("🎙 Обрабатываю голосовое сообщение...")
+    status_msg = await message.answer("🎙 Обрабатываю медиафайл (это может занять несколько минут)...")
     file_path = None
     try:
-        file_path = await download_telegram_audio(message, bot)
-        transcribed_text = transcribe_audio(file_path)
+        file_path = await download_telegram_media(message, bot)
+        transcribed_text = transcribe_media(file_path)
         if not transcribed_text:
             await status_msg.edit_text(
                 "❌ Не удалось распознать речь. Сервис временно недоступен. "
@@ -105,7 +105,7 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
                 try:
                     await bot.send_message(
                         author_id,
-                        f"📌 Вы создали задачу (голосовое):\n\n"
+                        f"📌 Вы создали задачу из медиафайла:\n\n"
                         f"📋 {parse_result['task']}\n"
                         f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n"
                         f"👥 Ответственные: {', '.join(assignee_usernames) if assignee_usernames[0] else 'вы'}\n\n"
@@ -122,7 +122,7 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
                 try:
                     await bot.send_message(
                         responsible_id,
-                        f"🔔 Вам назначена задача в группе {message.chat.title} (голосовое):\n\n"
+                        f"🔔 Вам назначена задача из медиафайла в группе {message.chat.title}:\n\n"
                         f"📋 {parse_result['task']}\n"
                         f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n\n"
                         f"Управляйте задачей:",
@@ -137,7 +137,7 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
                 try:
                     await bot.send_message(
                         author_id,
-                        f"📌 Вы создали задачу для @{assignee_username} (голосовое):\n\n"
+                        f"📌 Вы создали задачу для @{assignee_username} из медиафайла:\n\n"
                         f"📋 {parse_result['task']}\n"
                         f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n\n"
                         f"Вы можете удалить задачу, если она создана ошибочно:",
@@ -156,7 +156,7 @@ async def handle_voice_message(message: Message, bot: Bot) -> None:
         await status_msg.edit_text(reply_text)
     except Exception as e:
         logger.error(f"Ошибка в voice_handler: {e}")
-        await status_msg.edit_text("⚠️ Произошла ошибка при обработке аудио.")
+        await status_msg.edit_text("⚠️ Произошла ошибка при обработке медиафайла.")
     finally:
         if file_path:
             cleanup_temp_file(file_path)
