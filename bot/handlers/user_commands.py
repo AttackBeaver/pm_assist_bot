@@ -23,7 +23,6 @@ from web.database import (
 )
 from yougile_client import YouGileClient
 
-from bot.utils.meet_automation import join_and_record_meet
 from bot.utils.audio_utils import transcribe_media
 from bot.utils.llm_parser import parse_task_with_llm
 from bot.utils.date_utils import deadline_to_timestamp
@@ -41,7 +40,7 @@ try:
     MEET_AUTOMATION_AVAILABLE = True
 except ImportError:
     MEET_AUTOMATION_AVAILABLE = False
-    logger.warning("Playwright не установлен. Команда /join_meet будет недоступна.")
+    logger.warning("Playwright не установлен. Команда /join_meet будет работать в упрощённом режиме (инструкция).")
     join_and_record_meet = None
 
 def _main_keyboard() -> ReplyKeyboardMarkup:
@@ -444,25 +443,34 @@ async def cmd_complete(message: Message):
         await message.answer("⚠️ Произошла ошибка при завершении задачи.")
 
 @router.message(Command("join_meet"))
+@router.message(F.text == "📞 Встреча")
 async def cmd_join_meet(message: Message):
     if not MEET_AUTOMATION_AVAILABLE:
-        await message.answer("❌ Функция автоматического подключения к встречам временно недоступна (отсутствуют необходимые компоненты). Пожалуйста, используйте ручную загрузку аудиофайлов.")
+        await message.answer(
+            "⚠️ **Автоматическое подключение к встречам временно недоступно**\n\n"
+            "Чтобы обработать запись встречи, используйте один из способов:\n\n"
+            "1. **Загрузите аудиофайл** – отправьте мне запись в формате .mp3, .wav, .ogg\n"
+            "2. **Загрузите видео** – отправьте файл .webm, .mp4\n"
+            "3. **Ссылка на Яндекс.Диск** – поделитесь публичной ссылкой на запись\n\n"
+            "Я распознаю речь, сделаю саммари и создам задачи в YouGile.\n\n"
+            "📌 Для автоматического подключения необходим выделенный сервер с поддержкой браузера и звука.",
+            parse_mode="Markdown"
+        )
         return
+    # Далее оригинальный код /join_meet (с аргументами)
     args = message.text.split()
     if len(args) < 2:
         await message.answer(
             "ℹ️ Используйте: `/join_meet <ссылка_на_телемост> [длительность_в_секундах]`\n"
-            "Пример: `/join_meet https://telemost.yandex.ru/... 120`\n\n"
-            "⚠️ Функция требует наличия PulseAudio и loopback-модуля в Docker-контейнере.",
+            "Пример: `/join_meet https://telemost.yandex.ru/... 120`",
             parse_mode="Markdown"
         )
         return
     meet_url = args[1]
-    duration = 60  # по умолчанию 1 минута
+    duration = 60
     if len(args) > 2 and args[2].isdigit():
         duration = int(args[2])
-    await message.answer(f"🤖 Подключаюсь к встрече `{meet_url}` на {duration} секунд. Это может занять до минуты...", parse_mode="Markdown")
-    # Запускаем асинхронную задачу
+    await message.answer(f"🤖 Подключаюсь к встрече `{meet_url}` на {duration} секунд...", parse_mode="Markdown")
     asyncio.create_task(process_auto_meet(meet_url, duration, message, message.bot))
 
 async def process_auto_meet(meet_url: str, duration: int, original_message: Message, bot):
