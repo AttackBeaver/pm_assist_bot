@@ -1,4 +1,4 @@
-﻿﻿import os
+﻿import os
 import sys
 from html import escape
 from fastapi import FastAPI, Form

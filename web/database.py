@@ -69,7 +69,6 @@ def init_db() -> None:
             conn.execute("ALTER TABLE user_stats ADD COLUMN tasks_created INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
-        # Индекс для истории
         conn.execute("CREATE INDEX IF NOT EXISTS idx_task_history_task_id ON task_history(task_id)")
 
 @contextmanager
@@ -140,13 +139,10 @@ def add_task(
             (task_id, title, description, deadline, deadline_timestamp,
              responsible_telegram_id, author_telegram_id, yougile_card_id, chat_id, datetime.now().isoformat())
         )
-    # Начисляем опыт за создание (+5 XP) автору
     update_user_stats(author_telegram_id, xp_delta=5, tasks_created_delta=1)
-    # Проверка ачивки "Первая задача" (у автора)
     tasks = get_tasks_by_user(author_telegram_id)
     if len(tasks) == 1:
         update_user_stats(author_telegram_id, achievements_to_add=["Первая задача"])
-    # Запись в историю
     add_task_history(task_id, 'pending', comment='Задача создана')
 
 def get_tasks_by_user(telegram_id: int, status: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -194,9 +190,7 @@ def complete_task(task_id: str) -> None:
     with _connect() as conn:
         conn.execute("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?",
                      (datetime.now().isoformat(), task_id))
-    # Начисляем опыт за выполнение (+10 XP) ответственному
     update_user_stats(responsible_id, xp_delta=10, tasks_completed_delta=1)
-    # Проверяем ачивки
     new_achievements = []
     with _connect() as conn:
         count = conn.execute(
@@ -236,11 +230,8 @@ def get_average_completion_time(telegram_id: int) -> Optional[float]:
     return total_hours / len(rows)
 
 def get_stale_tasks(days_old: int = 3) -> List[Dict[str, Any]]:
-    """Возвращает задачи, которые находятся в статусе 'pending' или 'in_progress'
-       и у которых нет активности (изменения статуса) более days_old дней."""
     threshold = (datetime.now() - timedelta(days=days_old)).isoformat()
     with _connect() as conn:
-        # Ищем задачи, не завершённые, и у которых последняя запись в истории старше порога
         rows = conn.execute("""
             SELECT t.id, t.title, t.responsible_telegram_id, t.created_at
             FROM tasks t
@@ -323,30 +314,31 @@ def get_on_time_completion_rate(telegram_id: int) -> float:
     return (on_time / len(rows)) * 100
 
 def get_average_time_in_progress(telegram_id: int) -> Optional[float]:
+    """Среднее время в статусе 'in_progress' (часы)."""
     with _connect() as conn:
-        task_ids = conn.execute(
+        task_rows = conn.execute(
             "SELECT id FROM tasks WHERE responsible_telegram_id = ? AND status = 'completed'",
             (telegram_id,)
         ).fetchall()
-    if not task_ids:
-        return None
-    total_hours = 0.0
-    count = 0
-    for t in task_ids:
-        task_id = t["id"]
-        entry = conn.execute(
-            "SELECT changed_at FROM task_history WHERE task_id = ? AND status_to = 'in_progress' ORDER BY changed_at ASC LIMIT 1",
-            (task_id,)
-        ).fetchone()
-        exit_ = conn.execute(
-            "SELECT changed_at FROM task_history WHERE task_id = ? AND status_to = 'completed' ORDER BY changed_at ASC LIMIT 1",
-            (task_id,)
-        ).fetchone()
-        if entry and exit_:
-            entry_time = datetime.fromisoformat(entry["changed_at"])
-            exit_time = datetime.fromisoformat(exit_["changed_at"])
-            total_hours += (exit_time - entry_time).total_seconds() / 3600
-            count += 1
+        if not task_rows:
+            return None
+        total_hours = 0.0
+        count = 0
+        for row in task_rows:
+            task_id = row["id"]
+            entry = conn.execute(
+                "SELECT changed_at FROM task_history WHERE task_id = ? AND status_to = 'in_progress' ORDER BY changed_at ASC LIMIT 1",
+                (task_id,)
+            ).fetchone()
+            exit_ = conn.execute(
+                "SELECT changed_at FROM task_history WHERE task_id = ? AND status_to = 'completed' ORDER BY changed_at ASC LIMIT 1",
+                (task_id,)
+            ).fetchone()
+            if entry and exit_:
+                entry_time = datetime.fromisoformat(entry["changed_at"])
+                exit_time = datetime.fromisoformat(exit_["changed_at"])
+                total_hours += (exit_time - entry_time).total_seconds() / 3600
+                count += 1
     return total_hours / count if count > 0 else None
 
 def get_task_status_counts(telegram_id: int) -> Dict[str, int]:

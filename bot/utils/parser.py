@@ -48,8 +48,9 @@ def parse_task(text: str, known_usernames: list[str]) -> dict:
     if not task:
         task = text.strip()
 
-    has_keyword = any(re.search(rf'\b{kw}\b', text_lower) for kw in _TASK_KEYWORDS)
-    has_stopword = any(re.search(rf'\b{sw}\b', text_lower) for sw in _STOP_WORDS)
+    has_keyword = any(re.search(rf'\b{re.escape(kw)}\b', text_lower) for kw in _TASK_KEYWORDS)
+    # экранируем каждое стоп-слово при поиске
+    has_stopword = any(re.search(rf'\b{re.escape(sw)}\b', text_lower) for sw in _STOP_WORDS)
     has_question = _QUESTION_PATTERNS.search(text_lower) is not None
     has_deadline = deadline is not None
     has_assignee = len(assignees) > 0
