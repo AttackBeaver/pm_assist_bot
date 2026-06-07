@@ -15,14 +15,21 @@ except ImportError:
     PLAYWRIGHT_AVAILABLE = False
     logger.warning("Playwright не установлен. Функции meet_automation будут заглушками.")
 
+
 async def capture_audio_with_ffmpeg(duration_seconds: int, output_path: str) -> bool:
+    """Захватывает аудио с PulseAudio устройства virtual_sink.monitor."""
     if not PLAYWRIGHT_AVAILABLE:
         logger.error("capture_audio_with_ffmpeg вызвана при отсутствии playwright")
         return False
+
+    # Передаём переменную окружения для PulseAudio
+    env = os.environ.copy()
+    env['PULSE_SERVER'] = 'unix:/run/user/1000/pulse/native'
+
     cmd = [
         "ffmpeg", "-y",
         "-f", "pulse",
-        "-i", "loopback",
+        "-i", "virtual_sink.monitor",   # используем монитор null-sink
         "-t", str(duration_seconds),
         "-acodec", "pcm_s16le",
         "-ar", "44100",
@@ -33,7 +40,8 @@ async def capture_audio_with_ffmpeg(duration_seconds: int, output_path: str) -> 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            env=env
         )
         _, stderr = await proc.communicate()
         if proc.returncode == 0:
@@ -46,10 +54,12 @@ async def capture_audio_with_ffmpeg(duration_seconds: int, output_path: str) -> 
         logger.error(f"Ошибка захвата аудио: {e}")
         return False
 
+
 async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_path: str) -> bool:
     if not PLAYWRIGHT_AVAILABLE:
         logger.error("join_and_record_meet вызвана при отсутствии playwright")
         return False
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -59,7 +69,8 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
                 "--disable-features=IsolateOrigins,site-per-process",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
-                "--autoplay-policy=no-user-gesture-required"
+                "--autoplay-policy=no-user-gesture-required",
+                "--alsa-output-device=virtual_sink",   # направляем звук в null-sink
             ]
         )
         context = await browser.new_context()
