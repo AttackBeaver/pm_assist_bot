@@ -48,6 +48,7 @@ except ImportError:
     join_and_record_meet = None
 
 def _main_keyboard() -> ReplyKeyboardMarkup:
+    """Главная клавиатура с обновлёнными кнопками."""
     return ReplyKeyboardMarkup(
         keyboard=[
             [
@@ -59,12 +60,6 @@ def _main_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text="✅ Доступен"),
             ],
             [
-                KeyboardButton(text="🏆 Достижения"),
-                KeyboardButton(text="📊 Статистика"),
-                KeyboardButton(text="📚 Рекомендации"),
-            ],
-            [
-                KeyboardButton(text="⏰ Ближайшие дедлайны"),
                 KeyboardButton(text="👨‍💼 Тест менеджера"),
                 KeyboardButton(text="👷 Тест исполнителя"),
             ],
@@ -83,11 +78,12 @@ def _cabinet_url_text(telegram_id: int) -> str:
 
 
 def _cabinet_inline(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
+    """Инлайн-кнопка для перехода в веб-кабинет, если не localhost."""
     url = _cabinet_url_text(telegram_id)
     if "localhost" in WEB_BASE_URL or "127.0.0.1" in WEB_BASE_URL:
         return None
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🌐 Открыть личный кабинет", url=url)
+        InlineKeyboardButton(text="🌐 Открыть веб-кабинет", url=url)
     ]])
 
 
@@ -108,6 +104,7 @@ async def cmd_start(message: Message) -> None:
         reply_markup=_main_keyboard(),
     )
 
+
 @router.message(Command("help"))
 @router.message(F.text == "❓ Помощь")
 async def cmd_help(message: Message) -> None:
@@ -122,7 +119,7 @@ async def cmd_help(message: Message) -> None:
         "/tasks — список ваших активных задач с номерами\n"
         "/move [номер] [колонка] — переместить задачу\n"
         "/complete [номер] — завершить задачу\n"
-        "/cabinet — открыть личный кабинет\n\n"
+        "/cabinet — личный кабинет (статистика, достижения)\n\n"
 
         "📊 Статистика и мотивация:\n"
         "/stats — ваша статистика\n"
@@ -140,6 +137,7 @@ async def cmd_help(message: Message) -> None:
 
         reply_markup=_main_keyboard()
     )
+
 
 @router.message(Command("tasks"))
 @router.message(F.text == "📋 Мои задачи")
@@ -166,13 +164,140 @@ async def cmd_tasks(message: Message) -> None:
 @router.message(Command("cabinet"))
 @router.message(F.text == "🌐 Личный кабинет")
 async def cmd_cabinet(message: Message) -> None:
-    cabinet_url = _cabinet_url_text(message.from_user.id)
-    inline = _cabinet_inline(message.from_user.id)
-    await message.answer(
-        f"🌐 Личный кабинет — управление задачами:\n{cabinet_url}",
-        reply_markup=inline,
+    """Отправляет сводку и инлайн-кнопки для детализации."""
+    uid = message.from_user.id
+    stats = get_user_stats(uid)
+    avg_time = get_average_completion_time(uid)
+    tasks_total = len(get_tasks_by_user(uid))
+    tasks_completed = len([t for t in get_tasks_by_user(uid) if t["status"] == "completed"])
+    tasks_pending = tasks_total - tasks_completed
+
+    text = (
+        f"👤 **Ваш профиль**\n\n"
+        f"✨ **Опыт (XP):** {stats['xp']}\n"
+        f"🧙 **Уровень:** {stats['level']}\n"
+        f"📋 **Всего задач:** {tasks_total}\n"
+        f"🟢 **В работе:** {tasks_pending}\n"
+        f"✅ **Выполнено:** {tasks_completed}\n"
+        f"⏱ **Среднее время выполнения:** {avg_time:.1f} ч" if avg_time else "⏱ **Среднее время выполнения:** —"
     )
 
+    # Инлайн-кнопки для детализации
+    inline_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📊 Детальная статистика", callback_data="cabinet_stats"),
+            InlineKeyboardButton(text="🏆 Достижения", callback_data="cabinet_achievements"),
+        ],
+        [
+            InlineKeyboardButton(text="📚 Рекомендации", callback_data="cabinet_recommendations"),
+            InlineKeyboardButton(text="⏰ Ближайшие дедлайны", callback_data="cabinet_deadlines"),
+        ],
+    ])
+    # Добавляем кнопку веб-кабинета, если доступен
+    web_inline = _cabinet_inline(uid)
+    if web_inline:
+        inline_kb.inline_keyboard.append(web_inline.inline_keyboard[0])
+
+    await message.answer(text, parse_mode="Markdown", reply_markup=inline_kb)
+
+
+# Обработчики инлайн-кнопок из личного кабинета
+@router.callback_query(lambda c: c.data == "cabinet_stats")
+async def cabinet_stats_callback(callback: CallbackQuery):
+    await callback.answer()
+    uid = callback.from_user.id
+    stats = get_user_stats(uid)
+    avg_time = get_average_completion_time(uid)
+    tasks_total = len(get_tasks_by_user(uid))
+    tasks_completed = len([t for t in get_tasks_by_user(uid) if t["status"] == "completed"])
+    tasks_pending = tasks_total - tasks_completed
+
+    text = (
+        f"📊 **Детальная статистика**\n\n"
+        f"✨ XP: {stats['xp']}\n"
+        f"🧙 Уровень: {stats['level']}\n"
+        f"📋 Всего задач: {tasks_total}\n"
+        f"🟢 В работе: {tasks_pending}\n"
+        f"✅ Выполнено: {tasks_completed}\n"
+        f"⏱ Среднее время выполнения: {avg_time:.1f} ч" if avg_time else "⏱ Среднее время выполнения: —"
+    )
+    await callback.message.answer(text, parse_mode="Markdown")
+
+
+@router.callback_query(lambda c: c.data == "cabinet_achievements")
+async def cabinet_achievements_callback(callback: CallbackQuery):
+    await callback.answer()
+    uid = callback.from_user.id
+    stats = get_user_stats(uid)
+    achievements = stats.get("achievements", [])
+    if not achievements:
+        text = "🏆 У вас пока нет достижений.\n\nВыполняйте задачи, чтобы получать ачивки:\n• 🎯 Первая задача\n• ⚡ Спринтер (3 задачи)\n• 🧙‍♂️ Мастер (2 уровень)"
+    else:
+        lines = ["🏆 **Ваши достижения**:\n"]
+        for ach in achievements:
+            icon = "🏆"
+            if "Первая" in ach:
+                icon = "🎯"
+            elif "Спринтер" in ach:
+                icon = "⚡"
+            elif "Мастер" in ach:
+                icon = "🧙"
+            lines.append(f"{icon} {ach}")
+        text = "\n".join(lines)
+    await callback.message.answer(text, parse_mode="Markdown")
+
+
+@router.callback_query(lambda c: c.data == "cabinet_recommendations")
+async def cabinet_recommendations_callback(callback: CallbackQuery):
+    await callback.answer()
+    uid = callback.from_user.id
+    tasks = get_tasks_by_user(uid, status="completed")
+    if not tasks:
+        text = "📚 У вас пока нет выполненных задач. Сначала выполните несколько задач, чтобы получить рекомендации."
+    else:
+        all_text = " ".join([t["title"].lower() for t in tasks])
+        recommendations = []
+        if re.search(r'аналитик|анализ|отчет|отчёт|дашборд', all_text):
+            recommendations.append("📊 Аналитика данных – курс 'Основы SQL и визуализация'")
+        if re.search(r'python|код|программирование|скрипт', all_text):
+            recommendations.append("🐍 Python – курс 'Автоматизация рутинных задач'")
+        if re.search(r'управление|проект|менеджмент|agile|scrum', all_text):
+            recommendations.append("📈 Управление проектами – курс 'Agile и Scrum для PM'")
+        if re.search(r'коммуникация|презентация|выступление', all_text):
+            recommendations.append("🗣️ Коммуникации – курс 'Эффективные презентации'")
+        if re.search(r'баг|bug|дефект', all_text):
+            recommendations.append("🐞 Тестирование – курс 'Основы QA и баг-трекинг'")
+        if re.search(r'сервер|деплой|инфраструктура', all_text):
+            recommendations.append("☁️ DevOps – курс 'Введение в CI/CD и контейнеризацию'")
+        if not recommendations:
+            recommendations = ["🧠 Тайм-менеджмент – курс 'Как успевать больше'", "🎯 Постановка целей – курс 'SMART и OKR'"]
+        text = "📚 **Рекомендации по развитию:**\n\n" + "\n".join(recommendations)
+    await callback.message.answer(text, parse_mode="Markdown")
+
+
+@router.callback_query(lambda c: c.data == "cabinet_deadlines")
+async def cabinet_deadlines_callback(callback: CallbackQuery):
+    await callback.answer()
+    uid = callback.from_user.id
+    tasks = get_tasks_by_user(uid, status="pending")
+    upcoming = [t for t in tasks if t.get("deadline") and t["deadline"] != "Не указан"]
+    if not upcoming:
+        text = "⏰ У вас нет запланированных дедлайнов.\nСоздайте задачу с указанием срока."
+    else:
+        try:
+            upcoming.sort(key=lambda x: datetime.strptime(x["deadline"], "%Y-%m-%d") if x["deadline"] else datetime.max)
+        except:
+            pass
+        lines = ["⏰ **Ближайшие дедлайны** (первые 5):\n"]
+        for i, t in enumerate(upcoming[:5], 1):
+            lines.append(f"{i}. **{t['title']}** — до {t['deadline']}")
+        text = "\n".join(lines)
+    await callback.message.answer(text, parse_mode="Markdown")
+
+
+# ---------- Остальные команды (away, back, stats, achievements, deadlines, recommendations, move, complete, join_meet, тесты) ----------
+# Они остаются без изменений, кроме того, что кнопки статистики/достижений и т.д. мы убрали с клавиатуры,
+# но команды /stats, /achievements и т.п. продолжают работать для обратной совместимости.
 
 @router.message(Command("away"))
 @router.message(F.text == "🚫 Недоступен")
@@ -205,7 +330,7 @@ async def cmd_back(message: Message) -> None:
 
 
 @router.message(Command("stats"))
-@router.message(F.text == "📊 Статистика")
+@router.message(F.text == "📊 Статистика")  # оставлено для обратной совместимости
 async def cmd_stats(message: Message) -> None:
     uid = message.from_user.id
     stats = get_user_stats(uid)
@@ -316,6 +441,7 @@ async def cmd_recommendations(message: Message):
     await message.answer(answer, parse_mode="Markdown", reply_markup=_main_keyboard())
 
 
+# ---------- Команды move, complete, join_meet, тестовые сценарии (без изменений) ----------
 @router.message(Command("move"))
 async def cmd_move(message: Message):
     args = message.text.split()
@@ -417,6 +543,7 @@ async def cmd_complete(message: Message):
         logger.error(f"Ошибка в /complete: {e}")
         await message.answer("⚠️ Произошла ошибка при завершении задачи.")
 
+
 @router.message(Command("join_meet"))
 @router.message(F.text == "📞 Встреча")
 async def cmd_join_meet(message: Message):
@@ -446,6 +573,7 @@ async def cmd_join_meet(message: Message):
         duration = int(args[2])
     await message.answer(f"🤖 Подключаюсь к встрече `{meet_url}` на {duration} секунд...", parse_mode="Markdown")
     asyncio.create_task(process_auto_meet(meet_url, duration, message, message.bot))
+
 
 async def process_auto_meet(meet_url: str, duration: int, original_message: Message, bot):
     chat_id = original_message.chat.id
