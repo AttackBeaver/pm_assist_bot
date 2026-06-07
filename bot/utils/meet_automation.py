@@ -71,8 +71,8 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
         browser = await p.chromium.launch(
             headless=True,
             args=[
-                "--use-fake-ui-for-media-stream",
-                "--use-fake-device-for-media-stream",
+                # "--use-fake-ui-for-media-stream",
+                # "--use-fake-device-for-media-stream",
                 "--disable-web-security",
                 "--disable-features=IsolateOrigins,site-per-process",
                 "--no-sandbox",
