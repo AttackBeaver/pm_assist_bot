@@ -5,7 +5,7 @@ import os
 import re
 from typing import Optional
 
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
@@ -35,6 +35,7 @@ from web.database import add_task, get_telegram_id_by_username
 import uuid
 import tempfile
 from bot.utils.parser import parse_task as regex_parse_task
+from bot.utils.mymeet_client import MyMeetClient
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -44,8 +45,9 @@ try:
     MEET_AUTOMATION_AVAILABLE = True
 except ImportError:
     MEET_AUTOMATION_AVAILABLE = False
-    logger.warning("Playwright не установлен. Команда /join_meet будет работать в упрощённом режиме (инструкция).")
+    logger.warning("Playwright не установлен. Автоматическое подключение через Playwright недоступно.")
     join_and_record_meet = None
+
 
 def _main_keyboard() -> ReplyKeyboardMarkup:
     """Главная клавиатура с обновлёнными кнопками."""
@@ -78,7 +80,6 @@ def _cabinet_url_text(telegram_id: int) -> str:
 
 
 def _cabinet_inline(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
-    """Инлайн-кнопка для перехода в веб-кабинет, если не localhost."""
     url = _cabinet_url_text(telegram_id)
     if "localhost" in WEB_BASE_URL or "127.0.0.1" in WEB_BASE_URL:
         return None
@@ -128,13 +129,11 @@ async def cmd_help(message: Message) -> None:
         "/recommendations — рекомендации по развитию\n\n"
 
         "🎙 Встречи и расшифровка:\n"
-        "/meet — инструкция по загрузке записи встречи\n"
-        "/join_meet [ссылка] [секунды] — подключение к Телемосту\n\n"
+        "Нажмите кнопку «📞 Встреча» для выбора способа обработки записи встречи.\n\n"
 
         "🛠 Настройки:\n"
         "/away [причина] — временно отключить назначение задач\n"
         "/back — снова доступен для задач",
-
         reply_markup=_main_keyboard()
     )
 
@@ -164,7 +163,6 @@ async def cmd_tasks(message: Message) -> None:
 @router.message(Command("cabinet"))
 @router.message(F.text == "🌐 Личный кабинет")
 async def cmd_cabinet(message: Message) -> None:
-    """Отправляет сводку и инлайн-кнопки для детализации."""
     uid = message.from_user.id
     stats = get_user_stats(uid)
     avg_time = get_average_completion_time(uid)
@@ -182,7 +180,6 @@ async def cmd_cabinet(message: Message) -> None:
         f"⏱ **Среднее время выполнения:** {avg_time:.1f} ч" if avg_time else "⏱ **Среднее время выполнения:** —"
     )
 
-    # Инлайн-кнопки для детализации
     inline_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📊 Детальная статистика", callback_data="cabinet_stats"),
@@ -193,7 +190,6 @@ async def cmd_cabinet(message: Message) -> None:
             InlineKeyboardButton(text="⏰ Ближайшие дедлайны", callback_data="cabinet_deadlines"),
         ],
     ])
-    # Добавляем кнопку веб-кабинета, если доступен
     web_inline = _cabinet_inline(uid)
     if web_inline:
         inline_kb.inline_keyboard.append(web_inline.inline_keyboard[0])
@@ -295,10 +291,7 @@ async def cabinet_deadlines_callback(callback: CallbackQuery):
     await callback.message.answer(text, parse_mode="Markdown")
 
 
-# ---------- Остальные команды (away, back, stats, achievements, deadlines, recommendations, move, complete, join_meet, тесты) ----------
-# Они остаются без изменений, кроме того, что кнопки статистики/достижений и т.д. мы убрали с клавиатуры,
-# но команды /stats, /achievements и т.п. продолжают работать для обратной совместимости.
-
+# ---------- Остальные команды ----------
 @router.message(Command("away"))
 @router.message(F.text == "🚫 Недоступен")
 async def cmd_away(message: Message) -> None:
@@ -330,7 +323,7 @@ async def cmd_back(message: Message) -> None:
 
 
 @router.message(Command("stats"))
-@router.message(F.text == "📊 Статистика")  # оставлено для обратной совместимости
+@router.message(F.text == "📊 Статистика")
 async def cmd_stats(message: Message) -> None:
     uid = message.from_user.id
     stats = get_user_stats(uid)
@@ -441,7 +434,7 @@ async def cmd_recommendations(message: Message):
     await message.answer(answer, parse_mode="Markdown", reply_markup=_main_keyboard())
 
 
-# ---------- Команды move, complete, join_meet, тестовые сценарии (без изменений) ----------
+# ---------- Команды move, complete ----------
 @router.message(Command("move"))
 async def cmd_move(message: Message):
     args = message.text.split()
@@ -544,38 +537,119 @@ async def cmd_complete(message: Message):
         await message.answer("⚠️ Произошла ошибка при завершении задачи.")
 
 
+# ---------- Обработка встреч (меню выбора) ----------
 @router.message(Command("join_meet"))
 @router.message(F.text == "📞 Встреча")
-async def cmd_join_meet(message: Message):
-    if not MEET_AUTOMATION_AVAILABLE:
-        await message.answer(
-            "⚠️ **Автоматическое подключение к встречам временно недоступно**\n\n"
-            "Чтобы обработать запись встречи, используйте один из способов:\n\n"
-            "1. **Загрузите аудиофайл** – отправьте мне запись в формате .mp3, .wav, .ogg\n"
-            "2. **Загрузите видео** – отправьте файл .webm, .mp4\n"
-            "3. **Ссылка на Яндекс.Диск** – поделитесь публичной ссылкой на запись\n\n"
-            "Я распознаю речь, сделаю саммари и создам задачи в YouGile.\n\n"
-            "📌 Для автоматического подключения необходим выделенный сервер с поддержкой браузера и звука.",
-            parse_mode="Markdown"
+async def cmd_join_meet(message: Message, bot: Bot) -> None:
+    """Показывает меню выбора способа обработки встречи."""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎙 Загрузить аудио/видео файл", callback_data="meet_upload_file")],
+        [InlineKeyboardButton(text="🔗 Ссылка на Яндекс.Диск", callback_data="meet_yadisk")],
+        [InlineKeyboardButton(text="🤖 Автоподключение через mymeet.ai", callback_data="meet_mymeet")],
+        [InlineKeyboardButton(text="🎧 Автоподключение (Playwright)", callback_data="meet_playwright")],
+    ])
+    await message.answer(
+        "Выберите способ обработки встречи:\n\n"
+        "• **Загрузить файл** – отправьте аудио/видео запись (работает всегда)\n"
+        "• **Ссылка на Яндекс.Диск** – укажите публичную ссылку на файл\n"
+        "• **mymeet.ai** – автоматическое подключение (требует API-ключ)\n"
+        "• **Playwright** – автономное подключение (требует выделенный сервер с PulseAudio)",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+
+
+@router.callback_query(lambda c: c.data == "meet_upload_file")
+async def meet_upload_file_callback(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.edit_text(
+        "🎙 **Отправьте мне аудио или видео файл**\n\n"
+        "Поддерживаются форматы: MP3, WAV, OGG, MP4, WEBM, AVI, MOV, MKV и др.\n\n"
+        "Я распознаю речь, выделю задачи, дедлайны и ответственных, "
+        "создам карточки в YouGile и отправлю уведомления.\n\n"
+        "Просто отправьте файл в этот чат."
+    )
+
+
+@router.callback_query(lambda c: c.data == "meet_yadisk")
+async def meet_yadisk_callback(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.edit_text(
+        "🔗 **Отправьте публичную ссылку на Яндекс.Диск**\n\n"
+        "Ссылка должна вести на аудио или видео файл.\n"
+        "Пример: `https://disk.yandex.ru/i/xxxxx`\n\n"
+        "Я скачаю файл, распознаю речь, выделю задачи и создам карточки в YouGile."
+    )
+
+
+@router.callback_query(lambda c: c.data == "meet_mymeet")
+async def meet_mymeet_callback(callback: CallbackQuery):
+    await callback.answer()
+    mymeet = MyMeetClient()
+    if not mymeet.is_available():
+        await callback.message.edit_text(
+            "⚠️ **Автоматическое подключение через mymeet.ai требует настройки**\n\n"
+            "Для использования этой функции необходимо:\n"
+            "1. Заключить корпоративный договор с сервисом [mymeet.ai](https://mymeet.ai)\n"
+            "2. Получить API‑ключ и указать его в переменной окружения `MYMEET_API_KEY`\n\n"
+            "После этого бот сможет автоматически подключаться к встречам на "
+            "Яндекс Телемост, Zoom, Google Meet, Microsoft Teams и др.\n\n"
+            "**Альтернатива (уже работает):** загрузите запись встречи файлом или ссылкой.",
+            parse_mode="Markdown",
+            disable_web_page_preview=True
         )
+        return
+    # Если ключ есть – запускаем интеграцию
+    await callback.message.edit_text(
+        "🤖 **Автоматическое подключение через mymeet.ai**\n\n"
+        "Отправьте ссылку на встречу в формате:\n"
+        "`/join_meet https://telemost.yandex.ru/... 300`\n\n"
+        "Где `300` – длительность записи в секундах (по умолчанию 300).\n\n"
+        "Поддерживаются: Яндекс Телемост, Zoom, Google Meet, Microsoft Teams, TrueConf, Jitsi."
+    )
+
+
+@router.callback_query(lambda c: c.data == "meet_playwright")
+async def meet_playwright_callback(callback: CallbackQuery):
+    await callback.answer()
+    if not MEET_AUTOMATION_AVAILABLE:
+        await callback.message.edit_text(
+            "⚠️ **Автоматическое подключение через Playwright недоступно**\n\n"
+            "Этот модуль требует выделенного сервера с установленным PulseAudio "
+            "и доступом к звуковому устройству (loopback).\n\n"
+            "На текущем хостинге функция отключена.\n\n"
+            "**Альтернатива:** загрузите запись встречи файлом или ссылкой на Яндекс.Диск."
+        )
+        return
+    await callback.message.edit_text(
+        "🎧 **Автоматическое подключение через Playwright + ffmpeg**\n\n"
+        "Отправьте ссылку на встречу в формате:\n"
+        "`/join_meet_auto https://telemost.yandex.ru/... 120`\n\n"
+        "Бот откроет браузер, подключится к встрече, запишет звук, распознает речь и создаст задачи.\n\n"
+        "⚠️ Требуется сервер с PulseAudio и X11 (или XVFB)."
+    )
+
+
+# ---------- Старый обработчик для Playwright (сохранён) ----------
+@router.message(Command("join_meet_auto"))
+async def cmd_join_meet_auto(message: Message, bot: Bot):
+    """Альтернативная команда для прямого вызова Playwright (только для продвинутых)."""
+    if not MEET_AUTOMATION_AVAILABLE:
+        await message.answer("❌ Playwright автоматизация недоступна на этом сервере.")
         return
     args = message.text.split()
     if len(args) < 2:
-        await message.answer(
-            "ℹ️ Используйте: `/join_meet <ссылка_на_телемост> [длительность_в_секундах]`\n"
-            "Пример: `/join_meet https://telemost.yandex.ru/... 120`",
-            parse_mode="Markdown"
-        )
+        await message.answer("Используйте: `/join_meet_auto <ссылка> [длительность]`")
         return
     meet_url = args[1]
-    duration = 60
+    duration = 120
     if len(args) > 2 and args[2].isdigit():
         duration = int(args[2])
-    await message.answer(f"🤖 Подключаюсь к встрече `{meet_url}` на {duration} секунд...", parse_mode="Markdown")
-    asyncio.create_task(process_auto_meet(meet_url, duration, message, message.bot))
+    await message.answer(f"🎧 Подключаюсь к встрече `{meet_url}` на {duration} сек...")
+    asyncio.create_task(process_auto_meet(meet_url, duration, message, bot))
 
 
-async def process_auto_meet(meet_url: str, duration: int, original_message: Message, bot):
+async def process_auto_meet(meet_url: str, duration: int, original_message: Message, bot: Bot):
     chat_id = original_message.chat.id
     user_id = original_message.from_user.id
     temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
@@ -626,7 +700,7 @@ async def process_auto_meet(meet_url: str, duration: int, original_message: Mess
                     yougile_card_id=card_id,
                     chat_id=chat_id,
                 )
-                add_task_history(task_uuid, 'pending', comment='Задача создана из встречи')
+                add_task_history(task_uuid, 'pending', comment='Задача создана из встречи (Playwright)')
                 created_tasks.append((parse_result["task"], assignee))
         reply = (
             f"🎤 **Встреча обработана!**\n\n"

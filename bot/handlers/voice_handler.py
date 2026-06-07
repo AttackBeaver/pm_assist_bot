@@ -3,7 +3,7 @@ import os
 import tempfile
 import logging
 import uuid
-import requests  # добавлен для HEAD-запроса
+import requests
 from aiogram import Router, F, Bot
 from aiogram.types import Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -19,8 +19,11 @@ from web.database import add_user, add_task, get_telegram_id_by_username, add_ta
 logger = logging.getLogger(__name__)
 router = Router()
 _CONFIDENCE_THRESHOLD = 70
-_MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 МБ для Telegram-файлов
-_MAX_DOWNLOAD_SIZE = 200 * 1024 * 1024  # 200 МБ для ссылок Яндекс.Диск
+_MAX_FILE_SIZE = 20 * 1024 * 1024
+_MAX_DOWNLOAD_SIZE = 200 * 1024 * 1024
+
+# Поддерживаемые расширения для обработки
+SUPPORTED_EXTENSIONS = {'webm', 'mp4', 'ogg', 'mp3', 'wav', 'aac', 'wma', 'avi', 'mov', 'mkv'}
 
 
 async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | None:
@@ -39,6 +42,12 @@ async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | Non
     return None
 
 
+def is_supported_audio_video_file(file_path: str) -> bool:
+    """Проверяет, является ли файл поддерживаемым аудио/видео по расширению."""
+    ext = os.path.splitext(file_path)[1].lower().lstrip('.')
+    return ext in SUPPORTED_EXTENSIONS
+
+
 # ---------- Обработчик ссылок на Яндекс.Диск (только личные сообщения) ----------
 @router.message(F.text, F.chat.type == "private")
 async def handle_yadisk_link(message: Message, bot: Bot) -> None:
@@ -52,19 +61,26 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
 
     direct_link = extract_yadisk_direct_link(url)
     if not direct_link:
-        await message.answer("❌ Не удалось получить прямую ссылку на файл. Убедитесь, что ссылка публичная и ведёт на файл.")
+        # Тихо игнорируем, если не удалось получить прямую ссылку (например, папка)
+        logger.info(f"Не удалось получить прямую ссылку для {url}, игнорируем")
         return
 
-    # Проверка размера файла перед скачиванием
+    # Проверяем Content-Type перед скачиванием
     try:
         head_resp = requests.head(direct_link, timeout=10)
         if head_resp.status_code == 200:
+            content_type = head_resp.headers.get('content-type', '').lower()
+            # Проверяем, что это аудио или видео
+            if not ('audio' in content_type or 'video' in content_type):
+                logger.info(f"Файл по ссылке {url} имеет тип {content_type}, не аудио/видео, игнорируем")
+                await message.answer("ℹ️ По ссылке найден файл, но он не является аудио или видео. Я обрабатываю только аудио/видео записи.")
+                return
             file_size = int(head_resp.headers.get('content-length', 0))
             if file_size > _MAX_DOWNLOAD_SIZE:
-                await message.answer(f"❌ Файл слишком большой ({file_size // (1024*1024)} МБ). Максимальный размер для обработки: 200 МБ.")
+                await message.answer(f"⚠️ Файл слишком большой ({file_size // (1024*1024)} МБ). Максимальный размер: 200 МБ.")
                 return
     except Exception as e:
-        logger.warning(f"Не удалось проверить размер файла: {e}")
+        logger.warning(f"Не удалось проверить тип файла по ссылке: {e}")
 
     temp_dir = tempfile.gettempdir()
     temp_filename = f"yadisk_{uuid.uuid4().hex}.tmp"
@@ -75,6 +91,13 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
         await message.answer("❌ Не удалось скачать файл. Проверьте ссылку и попробуйте снова.")
         if os.path.exists(temp_path):
             os.remove(temp_path)
+        return
+
+    # Дополнительная проверка после скачивания
+    if not is_supported_audio_video_file(temp_path):
+        logger.info(f"Скачанный файл {temp_path} не имеет поддерживаемого расширения, игнорируем")
+        await message.answer("ℹ️ Файл успешно скачан, но его формат не поддерживается для распознавания речи. Поддерживаются: MP3, WAV, OGG, MP4, WEBM, AVI, MOV, MKV и др.")
+        os.remove(temp_path)
         return
 
     file_size = os.path.getsize(temp_path)
@@ -91,10 +114,8 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
         llm_result = parse_task_with_llm(transcribed_text)
         if llm_result and llm_result.get("confidence", 0) >= _CONFIDENCE_THRESHOLD:
             parse_result = llm_result
-            logger.info(f"✅ Распознано через LLM: confidence={parse_result['confidence']}")
         else:
             parse_result = regex_parse_task(transcribed_text, known_usernames=[])
-            logger.info(f"🔄 Fallback на regex: confidence={parse_result['confidence']}")
 
         if parse_result["confidence"] < _CONFIDENCE_THRESHOLD:
             await status_msg.edit_text(f"🔊 Я услышал:\n{transcribed_text}\n\nНе уверен, что это задача.")
@@ -105,7 +126,7 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
             assignee_usernames = [None]
 
         author_id = message.from_user.id
-        created_tasks = []  # для сбора информации о созданных задачах
+        created_tasks = []
 
         for assignee_username in assignee_usernames:
             responsible_id = author_id
@@ -135,12 +156,9 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
                 yougile_card_id=card_id,
                 chat_id=message.chat.id,
             )
-            # Добавляем историю
             add_task_history(task_uuid, 'pending', comment='Задача создана из ссылки на Яндекс.Диск')
 
-            # Отправка уведомлений (но не автору внутри цикла)
             if responsible_id != author_id:
-                # Уведомление ответственному
                 keyboard_worker = InlineKeyboardBuilder()
                 keyboard_worker.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
                 keyboard_worker.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
@@ -155,10 +173,8 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
                 )
             created_tasks.append((parse_result["task"], assignee_username, task_uuid))
 
-        # Отправляем автору одно сводное сообщение
         if created_tasks:
             assignees_str = ', '.join([f"@{a}" if a else "вы" for _, a, _ in created_tasks])
-            # Используем task_uuid первой задачи для кнопок (если только одна задача – нормально, если несколько – автору будет несколько сообщений, но лучше так)
             first_uuid = created_tasks[0][2]
             keyboard = InlineKeyboardBuilder()
             keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{first_uuid}")
@@ -195,6 +211,24 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
 async def handle_media_message(message: Message, bot: Bot) -> None:
     add_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
 
+    # Проверяем, является ли документ поддерживаемым (если это документ)
+    if message.document:
+        file_name = message.document.file_name or ""
+        ext = file_name.split('.')[-1].lower() if '.' in file_name else ''
+        if ext not in SUPPORTED_EXTENSIONS:
+            # Тихо игнорируем неподдерживаемые документы (например, .pdf, .txt, .jpg)
+            logger.info(f"Игнорируем документ с неподдерживаемым расширением: {file_name}")
+            return
+    # Для голосовых, аудио, видео, видео-заметок — они всегда поддерживаются
+    # (Telegram сам ограничивает их форматы, но дополнительная проверка не повредит)
+    elif message.voice or message.audio or message.video or message.video_note:
+        # Все голосовые и аудио/видео в Telegram считаем поддерживаемыми
+        pass
+    else:
+        # Неизвестный тип — игнорируем
+        return
+
+    # Проверка размера файла (только для Telegram-файлов)
     file_size = 0
     if message.document:
         file_size = message.document.file_size
@@ -214,12 +248,6 @@ async def handle_media_message(message: Message, bot: Bot) -> None:
             "Для больших файлов загрузите их на Яндекс.Диск и отправьте мне публичную ссылку."
         )
         return
-
-    if message.document:
-        ext = message.document.file_name.split('.')[-1].lower()
-        if ext not in ['webm', 'mp4', 'ogg', 'mp3', 'wav', 'aac', 'wma', 'avi', 'mov', 'mkv']:
-            await message.answer("❌ Неподдерживаемый формат файла.")
-            return
 
     status_msg = await message.answer("🎙 Обрабатываю медиафайл...")
     file_path = None

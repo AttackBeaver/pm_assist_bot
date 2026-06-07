@@ -190,7 +190,7 @@ def _build_tasks_table(tasks: list, telegram_id: int) -> str:
         '<table class="task-table">'
         "<thead><tr>"
         "<th>Задача</th><th>Описание</th><th>Дедлайн</th><th>Статус</th><th>Действия</th>"
-        "</tr></thead>"
+        "<tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"
         "</table>"
     )

@@ -35,3 +35,12 @@ if YANDEX_FOLDER_ID and YANDEX_API_KEY:
     logger.info("✅ YandexGPT настроен — будет использоваться для распознавания задач")
 else:
     logger.warning("⚠️ YandexGPT не настроен — используется только regex‑парсер")
+
+# mymeet.ai (опционально, для автоматического подключения к встречам)
+MYMEET_API_KEY: str | None = os.getenv("MYMEET_API_KEY")
+MYMEET_API_URL: str = os.getenv("MYMEET_API_URL", "https://api.mymeet.ai/v1")
+
+if MYMEET_API_KEY:
+    logger.info("✅ mymeet.ai API ключ задан – будет использоваться для автоматического подключения к встречам")
+else:
+    logger.warning("⚠️ MYMEET_API_KEY не задан – автоматическое подключение к встречам недоступно, используйте загрузку файлов")
