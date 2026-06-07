@@ -645,7 +645,7 @@ async def cmd_join_meet_auto(message: Message, bot: Bot):
     duration = 120
     if len(args) > 2 and args[2].isdigit():
         duration = int(args[2])
-    await message.answer(f"🎧 Подключаюсь к встрече `{meet_url}` на {duration} сек...")
+    await message.answer(f"🎧 Подключаюсь к встрече {meet_url} на {duration} сек...")
     asyncio.create_task(process_auto_meet(meet_url, duration, message, bot))
 
 
