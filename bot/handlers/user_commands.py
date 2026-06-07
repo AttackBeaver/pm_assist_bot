@@ -660,7 +660,11 @@ async def process_auto_meet(meet_url: str, duration: int, original_message: Mess
         await original_message.answer("🎧 Подключаюсь и начинаю запись...")
         success = await join_and_record_meet(meet_url, duration, temp_wav)
         if not success:
-            await bot.send_message(chat_id, "❌ Не удалось захватить звук. Возможно, модуль loopback PulseAudio не загружен или нет прав.")
+            await bot.send_message(chat_id, "❌ Не удалось записать звук.")
+            return
+        file_size = os.path.getsize(temp_wav)
+        if file_size < 50000:  # 50 КБ
+            await bot.send_message(chat_id, f"⚠️ Записанный аудиофайл слишком мал ({file_size} байт). Возможно, нет звука на встрече. Попробуйте снова с громкой речью.")
             return
         await original_message.answer("🔊 Распознаю речь...")
         transcribed_text = transcribe_media(temp_wav)

@@ -59,6 +59,12 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
         logger.error("join_and_record_meet вызвана при отсутствии playwright")
         return False
 
+    # Добавим параметр имени, если Телемост поддерживает
+    if "?" in meet_url:
+        meet_url += "&name=PM-Assist_bot"
+    else:
+        meet_url += "?name=PM-Assist_bot"
+
     logger.info(f"Запуск браузера для URL: {meet_url}")
 
     async with async_playwright() as p:
@@ -66,7 +72,7 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
             headless=True,
             args=[
                 "--use-fake-ui-for-media-stream",
-                "--use-fake-device-for-media-stream",  # эмуляция микрофона
+                "--use-fake-device-for-media-stream",
                 "--disable-web-security",
                 "--disable-features=IsolateOrigins,site-per-process",
                 "--no-sandbox",
@@ -74,32 +80,23 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
                 "--autoplay-policy=no-user-gesture-required",
                 "--alsa-output-device=virtual_sink",
                 "--disable-background-timer-throttling",
-                "--disable-backgrounding-occluded-windows",
-                "--disable-renderer-backgrounding",
             ]
         )
         context = await browser.new_context()
         page = await context.new_page()
-        
-        logger.info(f"Переход по URL: {meet_url}")
         await page.goto(meet_url)
         await page.wait_for_load_state("networkidle")
-        
-        # Сделать скриншот для диагностики
-        screenshot_path = "/tmp/meet_before_click.png"
-        await page.screenshot(path=screenshot_path)
-        logger.info(f"Скриншот страницы до клика сохранён: {screenshot_path}")
-        
-        # Закрыть возможное модальное окно
+
+        # Закрыть модальное окно, если есть
         try:
             close_btn = await page.wait_for_selector("button[aria-label='Закрыть']", timeout=5000)
-            if close_btn:
+            if close_btn and await close_btn.is_visible():
                 await close_btn.click()
                 logger.info("Модальное окно закрыто")
-        except Exception as e:
-            logger.info(f"Модального окна не было: {e}")
-        
-        # Нажать кнопку "Подключиться"
+        except:
+            pass
+
+        # Нажать кнопку подключения
         try:
             button = await page.wait_for_selector('[data-testid="enter-conference-button"]', timeout=30000)
             await button.click(force=True)
@@ -108,28 +105,8 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
             logger.error(f"Не удалось нажать кнопку: {e}")
             await browser.close()
             return False
-        
-        # Ждём появления элемента, указывающего на успешное подключение
-        try:
-            # Пытаемся найти кнопку "Выйти" или "Отключиться"
-            exit_button = await page.wait_for_selector("text=Выйти", timeout=15000)
-            logger.info("Обнаружена кнопка 'Выйти' — подключение успешно")
-        except:
-            # Альтернативный текст
-            try:
-                exit_button = await page.wait_for_selector("text=Отключиться", timeout=5000)
-                logger.info("Обнаружена кнопка 'Отключиться' — подключение успешно")
-            except:
-                logger.warning("Не удалось найти признак успешного подключения")
-        
-        # Скриншот после клика
-        screenshot_after_path = "/tmp/meet_after_click.png"
-        await page.screenshot(path=screenshot_after_path)
-        logger.info(f"Скриншот страницы после клика: {screenshot_after_path}")
-        
-        # Запись звука
-        await asyncio.sleep(5)  # небольшая пауза перед записью
+
+        await asyncio.sleep(10)  # ждём подключения
         success = await capture_audio_with_ffmpeg(duration_seconds, output_wav_path)
-        
         await browser.close()
         return success
