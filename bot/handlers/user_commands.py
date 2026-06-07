@@ -654,6 +654,7 @@ async def process_auto_meet(meet_url: str, duration: int, original_message: Mess
     user_id = original_message.from_user.id
     temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
     os.environ['PULSE_SERVER'] = 'unix:/run/user/1000/pulse/native'
+    logger.info(f"PULSE_SERVER = {os.environ['PULSE_SERVER']}")
     try:
         await original_message.answer("🎧 Подключаюсь и начинаю запись...")
         success = await join_and_record_meet(meet_url, duration, temp_wav)
