@@ -15,6 +15,7 @@ except ImportError:
 
 
 async def capture_audio_with_ffmpeg(duration_seconds: int, output_path: str) -> bool:
+    """Захватывает аудио с PulseAudio устройства meet_sink.monitor."""
     if not PLAYWRIGHT_AVAILABLE:
         logger.error("capture_audio_with_ffmpeg вызвана при отсутствии playwright")
         return False
@@ -28,7 +29,7 @@ async def capture_audio_with_ffmpeg(duration_seconds: int, output_path: str) -> 
     cmd = [
         "ffmpeg", "-y",
         "-f", "pulse",
-        "-i", "virtual_sink.monitor",
+        "-i", "meet_sink.monitor",   # используем монитор нашего sink-а
         "-t", str(duration_seconds),
         "-acodec", "pcm_s16le",
         "-ar", "44100",
@@ -44,7 +45,10 @@ async def capture_audio_with_ffmpeg(duration_seconds: int, output_path: str) -> 
         )
         _, stderr = await proc.communicate()
         if proc.returncode == 0:
-            logger.info(f"Аудио сохранено: {output_path}")
+            size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+            logger.info(f"Аудио сохранено: {output_path}, размер: {size} байт")
+            if size < 50000:
+                logger.warning("Размер аудиофайла очень мал — вероятно, записана тишина")
             return True
         else:
             logger.error(f"Ошибка ffmpeg: {stderr.decode()}")
@@ -59,41 +63,45 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
         logger.error("join_and_record_meet вызвана при отсутствии playwright")
         return False
 
-    # Добавим параметр имени, если Телемост поддерживает
-    if "?" in meet_url:
-        meet_url += "&name=PM-Assist_bot"
-    else:
-        meet_url += "?name=PM-Assist_bot"
-
-    logger.info(f"Запуск браузера для URL: {meet_url}")
+    # Устанавливаем DISPLAY для Xvfb
+    os.environ['DISPLAY'] = ':99'
+    # Убедимся, что PulseAudio использует правильный сокет
+    os.environ['PULSE_SERVER'] = os.environ.get('PULSE_SERVER', 'unix:/var/run/pulse/native')
 
     async with async_playwright() as p:
+        # Запускаем браузер НЕ в headless, а через Xvfb (headed, но окно не видно)
         browser = await p.chromium.launch(
-            headless=True,
+            headless=False,   # важно: False, т.к. используем Xvfb
             args=[
-                # "--use-fake-ui-for-media-stream",
-                # "--use-fake-device-for-media-stream",
+                "--use-fake-ui-for-media-stream",   # автоматически разрешаем доступ к микрофону/камере
+                # "--use-fake-device-for-media-stream",  # Убираем – нам нужны реальные устройства!
                 "--disable-web-security",
                 "--disable-features=IsolateOrigins,site-per-process",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--autoplay-policy=no-user-gesture-required",
-                "--alsa-output-device=virtual_sink",
+                "--alsa-output-device=meet_sink",   # направляем звук в наш sink
                 "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
             ]
         )
         context = await browser.new_context()
+        # Разрешаем доступ к микрофону (на всякий случай)
+        await context.grant_permissions(["microphone", "camera"])
         page = await context.new_page()
+
+        logger.info(f"Переход по URL: {meet_url}")
         await page.goto(meet_url)
         await page.wait_for_load_state("networkidle")
 
-        # Закрыть модальное окно, если есть
+        # Закрыть возможное модальное окно
         try:
             close_btn = await page.wait_for_selector("button[aria-label='Закрыть']", timeout=5000)
-            if close_btn and await close_btn.is_visible():
+            if close_btn:
                 await close_btn.click()
                 logger.info("Модальное окно закрыто")
-        except:
+        except Exception:
             pass
 
         # Нажать кнопку подключения
@@ -106,7 +114,11 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
             await browser.close()
             return False
 
-        await asyncio.sleep(10)  # ждём подключения
+        # Ждём, пока звуковой поток станет активным
+        await asyncio.sleep(10)
+
+        # Запись аудио
         success = await capture_audio_with_ffmpeg(duration_seconds, output_wav_path)
+
         await browser.close()
         return success
