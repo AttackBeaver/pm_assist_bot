@@ -3,6 +3,7 @@ import re
 import tempfile
 import logging
 import subprocess
+import requests
 from aiogram import Bot
 from aiogram.types import Message
 
@@ -11,19 +12,12 @@ from config import SPEECH2TEXT_API_KEY
 
 logger = logging.getLogger(__name__)
 
-_STT_TIMEOUT = 300  # секунд (можно увеличить до 600 для длинных встреч)
+_STT_TIMEOUT = 300
+_HTTP_TIMEOUT = 30
 
 def extract_audio_from_video(video_path: str, output_audio_path: str) -> bool:
-    """Извлекает аудио из видеофайла с помощью ffmpeg."""
     try:
-        cmd = [
-            "ffmpeg", "-i", video_path,
-            "-vn",                     # без видео
-            "-acodec", "libmp3lame",
-            "-q:a", "2",               # качество
-            "-y",                      # перезаписывать
-            output_audio_path
-        ]
+        cmd = ["ffmpeg", "-i", video_path, "-vn", "-acodec", "libmp3lame", "-q:a", "2", "-y", output_audio_path]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode == 0:
             logger.info(f"Аудио извлечено: {output_audio_path}")
@@ -39,10 +33,7 @@ async def download_telegram_media(message: Message, bot: Bot) -> str:
     file_obj = message.voice or message.audio or message.video or message.video_note or message.document
     if not file_obj:
         raise ValueError("В сообщении нет голосового, аудио, видео или документа")
-
-    # Для документа используем file_obj напрямую
     file_info = await bot.get_file(file_obj.file_id)
-
     if message.document:
         ext = message.document.file_name.split('.')[-1]
     elif message.video_note:
@@ -55,17 +46,14 @@ async def download_telegram_media(message: Message, bot: Bot) -> str:
         ext = original_name.rsplit(".", 1)[-1] if "." in original_name else "mp3"
     else:
         ext = "ogg"
-
     temp_path = os.path.join(tempfile.gettempdir(), f"tg_media_{message.message_id}.{ext}")
     file_bytes_io = await bot.download_file(file_info.file_path)
     with open(temp_path, "wb") as f:
         f.write(file_bytes_io.getvalue())
-
     logger.info(f"Медиа сохранено: {temp_path}")
     return temp_path
 
 def convert_audio_format(input_path: str, output_ext: str = "mp3") -> str:
-    """Конвертирует аудио в поддерживаемый формат (mp3). Возвращает путь к новому файлу."""
     output_path = os.path.splitext(input_path)[0] + f".{output_ext}"
     try:
         cmd = ["ffmpeg", "-i", input_path, "-acodec", "libmp3lame", "-y", output_path]
@@ -80,7 +68,6 @@ def convert_audio_format(input_path: str, output_ext: str = "mp3") -> str:
         logger.error(f"Ошибка конвертации: {e}")
         return None
 
-
 def clean_transcription(raw_text: str) -> str:
     if not raw_text:
         return ""
@@ -88,12 +75,7 @@ def clean_transcription(raw_text: str) -> str:
     text = re.sub(r'\d{1,2}:\d{2}:\d{2}\s*-\s*', '', text)
     return re.sub(r'\s+', ' ', text).strip()
 
-
 def transcribe_media(file_path: str) -> str:
-    """
-    Синхронная транскрибация медиафайла (аудио или видео).
-    Поддерживает форматы: ogg, mp3, wav, mp4, webm, aac, wma, avi, mov, mkv.
-    """
     if not file_path:
         logger.error("transcribe_media: передан пустой путь к файлу")
         return ""
@@ -101,7 +83,6 @@ def transcribe_media(file_path: str) -> str:
     ext = os.path.splitext(file_path)[1].lower()
     audio_path = file_path
 
-    # 1. Если видео – извлекаем аудио
     video_extensions = [".webm", ".mp4", ".avi", ".mov", ".mkv"]
     if ext in video_extensions:
         temp_audio = os.path.join(tempfile.gettempdir(), f"extracted_audio_{os.path.basename(file_path)}.mp3")
@@ -111,7 +92,6 @@ def transcribe_media(file_path: str) -> str:
             logger.error("Не удалось извлечь аудио из видео")
             return ""
 
-    # 2. Проверяем, поддерживается ли формат напрямую API
     supported_formats = [".ogg", ".mp3", ".wav", ".mp4", ".aac", ".wma"]
     if ext not in supported_formats and audio_path == file_path:
         converted = convert_audio_format(audio_path, "mp3")
@@ -130,7 +110,12 @@ def transcribe_media(file_path: str) -> str:
 
         result = client.wait_and_get_result(task_id, result_format="txt", timeout=_STT_TIMEOUT)
         if not result:
-            logger.error("Не удалось получить результат распознавания")
+            try:
+                url = f"{client.BASE_URL}/{task_id}?api-key={client.api_key}"
+                response = requests.get(url, timeout=_HTTP_TIMEOUT)
+                logger.error(f"Speech2Text вернул статус {response.status_code}, тело: {response.text[:500]}")
+            except Exception as e:
+                logger.error(f"Не удалось получить детали ошибки Speech2Text: {e}")
             return ""
 
         cleaned = clean_transcription(result)
@@ -140,10 +125,8 @@ def transcribe_media(file_path: str) -> str:
         logger.error(f"Ошибка транскрибации: {e}")
         return ""
     finally:
-        # Удаляем временные аудиофайлы, если они были созданы
         if audio_path != file_path and os.path.exists(audio_path):
             os.remove(audio_path)
-
 
 def cleanup_temp_file(file_path: str) -> None:
     if not file_path:
@@ -155,7 +138,5 @@ def cleanup_temp_file(file_path: str) -> None:
     except OSError as e:
         logger.error(f"Не удалось удалить {file_path}: {e}")
 
-
-# Сохраняем старые имена для обратной совместимости
 download_telegram_audio = download_telegram_media
 transcribe_audio = transcribe_media
