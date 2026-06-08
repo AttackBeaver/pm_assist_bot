@@ -44,3 +44,12 @@ if MYMEET_API_KEY:
     logger.info("✅ mymeet.ai API ключ задан – будет использоваться для автоматического подключения к встречам")
 else:
     logger.warning("⚠️ MYMEET_API_KEY не задан – автоматическое подключение к встречам недоступно, используйте загрузку файлов")
+
+# yandex_telemost
+YANDEX_TELEMOST_OAUTH_TOKEN: str | None = os.getenv("YANDEX_TELEMOST_OAUTH_TOKEN")
+YANDEX_TELEMOST_BOT_EMAIL: str | None = os.getenv("YANDEX_TELEMOST_BOT_EMAIL")
+
+if YANDEX_TELEMOST_OAUTH_TOKEN:
+    logger.info("✅ Yandex Telemost OAuth токен задан")
+else:
+    logger.warning("⚠️ YANDEX_TELEMOST_OAUTH_TOKEN не задан — API интеграция недоступна")
