@@ -36,7 +36,7 @@ import uuid
 import tempfile
 from bot.utils.parser import parse_task as regex_parse_task
 from bot.utils.mymeet_client import MyMeetClient
-from aiogram.types import InputFile
+from aiogram.types import BufferedInputFile
 
 logger = logging.getLogger(__name__)
 router = Router()
