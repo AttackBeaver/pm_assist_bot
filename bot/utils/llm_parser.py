@@ -93,6 +93,15 @@ def parse_task_with_llm(text: str) -> Optional[Dict[str, Any]]:
     try:
         clean = response.strip().strip('```json').strip('```').strip()
         data = json.loads(clean)
+        # Если YandexGPT вернул список задач, берём первую
+        if isinstance(data, list):
+            if data:
+                data = data[0]
+            else:
+                return None
+        task = data.get("task")
+        deadline = data.get("deadline")
+        assignees = data.get("assignees") or []
         task = data.get("task")
         deadline = data.get("deadline")
         assignees = data.get("assignees") or []
