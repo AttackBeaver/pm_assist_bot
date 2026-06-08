@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger(__name__)
 
 class TelemostClient:
-    BASE_URL = "https://api.telemost.yandex.net/v1"
+    BASE_URL = "https://cloud-api.yandex.net/v1/telemost-api"
 
     def __init__(self, oauth_token: str):
         self.oauth_token = oauth_token
