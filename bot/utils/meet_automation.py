@@ -16,7 +16,6 @@ async def handle_download(download):
     try:
         # Сохраняем файл во временную директорию
         download_path = await download.path()
-        # Копируем файл в нужное место (download.path() может быть временным)
         target_path = f"/tmp/meet_recording_{asyncio.current_task().get_name()}.webm"
         with open(download_path, 'rb') as src, open(target_path, 'wb') as dst:
             dst.write(src.read())
@@ -82,7 +81,7 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
 
         # Найти кнопку "Ещё" (три точки) и открыть меню
         try:
-            more_button = await page.wait_selector('button[aria-label="Ещё"]', timeout=10000)
+            more_button = await page.wait_for_selector('button[aria-label="Ещё"]', timeout=10000)
             await more_button.click()
             logger.info("Меню 'Ещё' открыто")
         except Exception as e:
