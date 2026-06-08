@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import requests
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from config import YANDEX_FOLDER_ID, YANDEX_API_KEY
 from bot.utils.parser import _TASK_KEYWORDS, _STOP_WORDS
@@ -59,31 +59,27 @@ def get_client():
     return _client
 
 
-def parse_task_with_llm(text: str) -> Optional[Dict[str, Any]]:
+def parse_task_with_llm(text: str) -> Optional[List[Dict[str, Any]]]:
+    """
+    Возвращает список задач (каждая задача – словарь с ключами task, deadline, assignees)
+    или None, если ничего не найдено.
+    """
     client = get_client()
     if not client:
         return None
 
-    # Улучшенный системный промпт
     system_prompt = """
-Ты — ассистент по управлению задачами. Из текста сообщения извлеки задачу, дедлайн и ответственных.
+Ты — ассистент по управлению задачами. Из текста сообщения извлеки **все задачи**, дедлайны и ответственных.
 Правила:
 - Задача должна содержать **глагол действия**: сделать, подготовить, написать, обновить, проверить, отправить, создать, организовать, купить, заказать и т.п.
 - Если в сообщении нет глагола действия, нет @упоминания, нет указания на срок → верни null.
-- Игнорируй вопросы, уточнения, бытовые фразы ("доброе утро", "до 23:59", "как дела", "спасибо").
-- Если сообщение похоже на задачу, извлеки:
-   * task: краткая формулировка (без лишних слов)
+- Игнорируй вопросы, уточнения, бытовые фразы.
+- Если в тексте несколько задач, верни массив объектов.
+- Для каждой задачи извлеки:
+   * task: краткая формулировка
    * deadline: дата/время в понятном формате (если есть)
    * assignees: список username (без @)
-- Думай логически, это должно быть похоже на задачу.
-- Ответ должен быть ТОЛЬКО в формате JSON, без дополнительных комментариев.
-
-Примеры:
-Пользователь: "до 23:59"
-Ответ: {"task": null, "deadline": null, "assignees": []}
-
-Пользователь: "@ivan нужно сделать отчёт до пятницы"
-Ответ: {"task": "сделать отчёт", "deadline": "пятница", "assignees": ["ivan"]}
+- Ответ должен быть ТОЛЬКО в формате JSON. Если задач несколько, верни список. Если задача одна, можно вернуть объект (не список).
 """
     prompt = f"Пользователь: {text}"
     response = client.generate_text(prompt, system_prompt=system_prompt)
@@ -93,37 +89,37 @@ def parse_task_with_llm(text: str) -> Optional[Dict[str, Any]]:
     try:
         clean = response.strip().strip('```json').strip('```').strip()
         data = json.loads(clean)
-        # Если YandexGPT вернул список задач, берём первую
-        if isinstance(data, list):
-            if data:
-                data = data[0]
-            else:
-                return None
-        task = data.get("task")
-        deadline = data.get("deadline")
-        assignees = data.get("assignees") or []
-        task = data.get("task")
-        deadline = data.get("deadline")
-        assignees = data.get("assignees") or []
-        if not isinstance(assignees, list):
-            assignees = [assignees] if assignees else []
 
-        # Пост-валидация
-        if not task or len(task.strip()) < 4:
+        # Приводим к списку
+        if isinstance(data, dict):
+            data = [data]
+        if not isinstance(data, list) or not data:
             return None
 
-        lower_text = text.lower()
-        for sw in _STOP_WORDS:
-            if re.search(rf'\b{re.escape(sw)}\b', lower_text):
-                logger.info(f"Стоп-слово '{sw}' – игнорируем")
-                return None
+        tasks = []
+        for item in data:
+            task = item.get("task")
+            deadline = item.get("deadline")
+            assignees = item.get("assignees") or []
+            if not isinstance(assignees, list):
+                assignees = [assignees] if assignees else []
 
-        return {
-            "task": task,
-            "deadline": deadline,
-            "assignees": assignees,
-            "confidence": 95,
-        }
+            # Пост-валидация
+            if not task or len(task.strip()) < 4:
+                continue
+
+            lower_text = text.lower()
+            has_stopword = any(re.search(rf'\b{re.escape(sw)}\b', lower_text) for sw in _STOP_WORDS)
+            if has_stopword:
+                continue
+
+            tasks.append({
+                "task": task,
+                "deadline": deadline,
+                "assignees": assignees,
+                "confidence": 95,
+            })
+        return tasks if tasks else None
     except Exception as e:
         logger.error(f"Ошибка парсинга JSON из LLM: {e}\nОтвет: {response}")
         return None
