@@ -47,10 +47,23 @@ async def process_meeting(meet_url: str, duration: int, original_message: Messag
         if summary:
             await bot.send_message(chat_id, f"📝 **Краткое саммари встречи:**\n{summary}")
 
-        # Извлечение задач
+        # --- Извлечение задач с fallback на саммари ---
         parse_result = parse_task_with_llm(transcribed_text)
         if not parse_result or parse_result.get("confidence", 0) < 70:
+            if summary:
+                parse_result = parse_task_with_llm(summary)
+                if parse_result and parse_result.get("confidence", 0) >= 70:
+                    logger.info("Задача извлечена из саммари встречи (LLM)")
+                else:
+                    parse_result = None
+
+        if not parse_result or parse_result.get("confidence", 0) < 70:
             parse_result = regex_parse_task(transcribed_text, known_usernames=[])
+            if parse_result["confidence"] < 70 and summary:
+                parse_result = regex_parse_task(summary, known_usernames=[])
+                if parse_result["confidence"] >= 70:
+                    logger.info("Задача извлечена из саммари встречи (regex)")
+
         if not parse_result or parse_result.get("confidence", 0) < 70:
             await bot.send_message(chat_id, "🔊 Не удалось выделить задачи.")
             return
@@ -72,63 +85,66 @@ async def process_meeting(meet_url: str, duration: int, original_message: Messag
                 description=transcribed_text,
                 deadline_str=parse_result["deadline"],
             )
-            if card_id:
-                task_uuid = str(uuid.uuid4())
-                add_task(
-                    task_id=task_uuid,
-                    title=parse_result["task"],
-                    description=transcribed_text,
-                    responsible_telegram_id=responsible_id,
-                    author_telegram_id=author_id,
-                    deadline=parse_result["deadline"],
-                    deadline_timestamp=deadline_to_timestamp(parse_result["deadline"]) if parse_result["deadline"] else None,
-                    yougile_card_id=card_id,
-                    chat_id=chat_id,
-                )
-                add_task_history(task_uuid, 'pending', comment='Задача из встречи')
-                created_tasks.append((parse_result["task"], assignee))
+            if not card_id:
+                await bot.send_message(chat_id, "❌ Не удалось создать задачу в YouGile.")
+                return
 
-                # Отправка уведомлений
-                assignee_str = f"@{assignee}" if assignee else "не назначен"
-                if responsible_id == author_id:
-                    keyboard = InlineKeyboardBuilder()
-                    keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
-                    keyboard.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
-                    keyboard.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
-                    keyboard.adjust(1)
-                    await bot.send_message(
-                        author_id,
-                        f"📌 Вы создали задачу из встречи:\n\n"
-                        f"📋 {parse_result['task']}\n"
-                        f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n"
-                        f"👥 Ответственные: {assignee_str}\n\n"
-                        f"Управляйте задачей:",
-                        reply_markup=keyboard.as_markup()
-                    )
-                else:
-                    keyboard_worker = InlineKeyboardBuilder()
-                    keyboard_worker.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
-                    keyboard_worker.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
-                    keyboard_worker.adjust(1)
-                    await bot.send_message(
-                        responsible_id,
-                        f"🔔 Вам назначена задача из встречи (из расшифровки):\n\n"
-                        f"📋 {parse_result['task']}\n"
-                        f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n\n"
-                        f"Управляйте задачей:",
-                        reply_markup=keyboard_worker.as_markup()
-                    )
-                    keyboard_author = InlineKeyboardBuilder()
-                    keyboard_author.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
-                    keyboard_author.adjust(1)
-                    await bot.send_message(
-                        author_id,
-                        f"📌 Вы создали задачу для @{assignee} из встречи:\n\n"
-                        f"📋 {parse_result['task']}\n"
-                        f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n\n"
-                        f"Вы можете удалить задачу, если она создана ошибочно:",
-                        reply_markup=keyboard_author.as_markup()
-                    )
+            task_uuid = str(uuid.uuid4())
+            add_task(
+                task_id=task_uuid,
+                title=parse_result["task"],
+                description=transcribed_text,
+                responsible_telegram_id=responsible_id,
+                author_telegram_id=author_id,
+                deadline=parse_result["deadline"],
+                deadline_timestamp=deadline_to_timestamp(parse_result["deadline"]) if parse_result["deadline"] else None,
+                yougile_card_id=card_id,
+                chat_id=chat_id,
+            )
+            add_task_history(task_uuid, 'pending', comment='Задача из встречи')
+            created_tasks.append((parse_result["task"], assignee))
+
+            # Уведомления
+            assignee_str = f"@{assignee}" if assignee else "не назначен"
+            if responsible_id == author_id:
+                keyboard = InlineKeyboardBuilder()
+                keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
+                keyboard.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
+                keyboard.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
+                keyboard.adjust(1)
+                await bot.send_message(
+                    author_id,
+                    f"📌 Вы создали задачу из встречи:\n\n"
+                    f"📋 {parse_result['task']}\n"
+                    f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n"
+                    f"👥 Ответственные: {assignee_str}\n\n"
+                    f"Управляйте задачей:",
+                    reply_markup=keyboard.as_markup()
+                )
+            else:
+                keyboard_worker = InlineKeyboardBuilder()
+                keyboard_worker.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
+                keyboard_worker.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
+                keyboard_worker.adjust(1)
+                await bot.send_message(
+                    responsible_id,
+                    f"🔔 Вам назначена задача из встречи (из расшифровки):\n\n"
+                    f"📋 {parse_result['task']}\n"
+                    f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n\n"
+                    f"Управляйте задачей:",
+                    reply_markup=keyboard_worker.as_markup()
+                )
+                keyboard_author = InlineKeyboardBuilder()
+                keyboard_author.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
+                keyboard_author.adjust(1)
+                await bot.send_message(
+                    author_id,
+                    f"📌 Вы создали задачу для @{assignee} из встречи:\n\n"
+                    f"📋 {parse_result['task']}\n"
+                    f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n\n"
+                    f"Вы можете удалить задачу, если она создана ошибочно:",
+                    reply_markup=keyboard_author.as_markup()
+                )
 
         reply = (
             f"🎤 **Встреча обработана!**\n\n"
