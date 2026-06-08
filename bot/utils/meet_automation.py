@@ -15,7 +15,6 @@ except ImportError:
 
 
 async def capture_audio_with_ffmpeg(duration_seconds: int, output_path: str) -> bool:
-    """Захватывает аудио с PulseAudio устройства meet_sink.monitor."""
     if not PLAYWRIGHT_AVAILABLE:
         logger.error("capture_audio_with_ffmpeg вызвана при отсутствии playwright")
         return False
@@ -29,7 +28,7 @@ async def capture_audio_with_ffmpeg(duration_seconds: int, output_path: str) -> 
     cmd = [
         "ffmpeg", "-y",
         "-f", "pulse",
-        "-i", "meet_sink.monitor",   # используем монитор нашего sink-а
+        "-i", "meet_sink.monitor",
         "-t", str(duration_seconds),
         "-acodec", "pcm_s16le",
         "-ar", "16000",
@@ -63,31 +62,28 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
         logger.error("join_and_record_meet вызвана при отсутствии playwright")
         return False
 
-    # Устанавливаем DISPLAY для Xvfb
     os.environ['DISPLAY'] = ':99'
-    # Убедимся, что PulseAudio использует правильный сокет
     os.environ['PULSE_SERVER'] = os.environ.get('PULSE_SERVER', 'unix:/var/run/pulse/native')
+    os.environ['PULSE_SINK'] = 'meet_sink'
 
     async with async_playwright() as p:
-        # Запускаем браузер НЕ в headless, а через Xvfb (headed, но окно не видно)
         browser = await p.chromium.launch(
-            headless=False,   # важно: False, т.к. используем Xvfb
+            headless=False,
             args=[
-                "--use-fake-ui-for-media-stream",   # автоматически разрешаем доступ к микрофону/камере
-                # "--use-fake-device-for-media-stream",  # Убираем – нам нужны реальные устройства!
+                "--use-fake-ui-for-media-stream",
                 "--disable-web-security",
                 "--disable-features=IsolateOrigins,site-per-process",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--autoplay-policy=no-user-gesture-required",
-                "--alsa-output-device=meet_sink",   # направляем звук в наш sink
+                "--alsa-output-device=meet_sink",
                 "--disable-background-timer-throttling",
                 "--disable-backgrounding-occluded-windows",
                 "--disable-renderer-backgrounding",
-            ]
+            ],
+            env=os.environ.copy()
         )
         context = await browser.new_context()
-        # Разрешаем доступ к микрофону (на всякий случай)
         await context.grant_permissions(["microphone", "camera"])
         page = await context.new_page()
 
@@ -95,7 +91,6 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
         await page.goto(meet_url)
         await page.wait_for_load_state("networkidle")
 
-        # Закрыть возможное модальное окно
         try:
             close_btn = await page.wait_for_selector("button[aria-label='Закрыть']", timeout=5000)
             if close_btn:
@@ -104,7 +99,6 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
         except Exception:
             pass
 
-        # Нажать кнопку подключения
         try:
             button = await page.wait_for_selector('[data-testid="enter-conference-button"]', timeout=30000)
             await button.click(force=True)
@@ -114,11 +108,7 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
             await browser.close()
             return False
 
-        # Ждём, пока звуковой поток станет активным
         await asyncio.sleep(10)
-
-        # Запись аудио
         success = await capture_audio_with_ffmpeg(duration_seconds, output_wav_path)
-
         await browser.close()
         return success
