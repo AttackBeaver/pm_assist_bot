@@ -36,6 +36,7 @@ import uuid
 import tempfile
 from bot.utils.parser import parse_task as regex_parse_task
 from bot.utils.mymeet_client import MyMeetClient
+from aiogram.types import InputFile
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -659,6 +660,18 @@ async def process_auto_meet(meet_url: str, duration: int, original_message: Mess
     try:
         await original_message.answer("🎧 Подключаюсь и начинаю запись...")
         success = await join_and_record_meet(meet_url, duration, temp_wav)
+        if success:
+            # Отправляем аудиофайл пользователю для проверки
+            try:
+                with open(temp_wav, 'rb') as f:
+                    await bot.send_audio(
+                        chat_id=original_message.chat.id,
+                        audio=InputFile(f, filename="meeting_recording.wav"),
+                        caption="🎤 Запись встречи (для проверки качества)"
+                    )
+                logger.info("Аудиозапись отправлена в чат")
+            except Exception as e:
+                logger.error(f"Не удалось отправить аудиофайл: {e}")
         if not success:
             await bot.send_message(chat_id, "❌ Не удалось записать звук.")
             return
