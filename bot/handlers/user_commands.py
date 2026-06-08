@@ -37,6 +37,8 @@ import tempfile
 from bot.utils.parser import parse_task as regex_parse_task
 from bot.utils.mymeet_client import MyMeetClient
 from aiogram.types import BufferedInputFile
+from bot.utils.telemost_client import TelemostClient
+from config import YANDEX_TELEMOST_OAUTH_TOKEN, YANDEX_TELEMOST_BOT_EMAIL
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -737,6 +739,108 @@ async def process_auto_meet(meet_url: str, duration: int, original_message: Mess
         if os.path.exists(temp_wav):
             os.remove(temp_wav)
 
+@router.message(Command("meet_api"))
+async def cmd_meet_api(message: Message, bot: Bot):
+    """Создаёт встречу через API Яндекс Телемоста с авторасшифровкой."""
+    if not YANDEX_TELEMOST_OAUTH_TOKEN:
+        await message.answer("❌ OAuth-токен не задан. Пропишите YANDEX_TELEMOST_OAUTH_TOKEN в .env")
+        return
+    if not YANDEX_TELEMOST_BOT_EMAIL:
+        await message.answer("❌ Email бота не задан. Пропишите YANDEX_TELEMOST_BOT_EMAIL в .env")
+        return
+
+    client = TelemostClient(YANDEX_TELEMOST_OAUTH_TOKEN)
+    
+    # 1. Создаём встречу с авто-расшифровкой
+    conference = client.create_conference(
+        title="Встреча от PM Assist Bot",
+        is_auto_summarization_enabled=True,
+        cohosts_emails=[YANDEX_TELEMOST_BOT_EMAIL]
+    )
+    if not conference:
+        await message.answer("❌ Не удалось создать встречу. Проверьте токен и доступ.")
+        return
+
+    meet_url = conference.get("join_link")
+    conf_id = conference.get("id")
+    if not meet_url or not conf_id:
+        await message.answer("❌ API не вернул ссылку или ID встречи.")
+        return
+
+    await message.answer(f"✅ Встреча создана!\nСсылка: {meet_url}\nID: {conf_id}\n"
+                         f"Запись и расшифровка будут автоматически включены.\n"
+                         f"Бот подключится к встрече как участник на 120 секунд...")
+
+    # 2. Подключаемся к встрече через Playwright (чтобы активировать запись)
+    # Для этого создадим простую функцию connect_only, которая не будет нажимать кнопку записи.
+    temp_wav = None  # не нужен
+    # Используем модифицированную версию без записи
+    success = await connect_to_meet_only(meet_url, duration_seconds=120)
+    if not success:
+        await message.answer("❌ Не удалось подключиться к встрече через браузер.")
+        return
+
+    await message.answer("✅ Встреча завершена. Ожидаем готовности расшифровки (до 5 минут)...")
+
+    # 3. Ожидаем появления результата расшифровки
+    summarization_url = None
+    for _ in range(30):  # 30 * 10 сек = 5 минут
+        await asyncio.sleep(10)
+        conf_info = client.get_conference(conf_id)
+        if conf_info and conf_info.get("summarization_url"):
+            summarization_url = conf_info["summarization_url"]
+            break
+        # также можно проверить поле "summarization_result"
+        if conf_info and conf_info.get("summarization_result"):
+            summarization_url = conf_info["summarization_result"]
+            break
+
+    if summarization_url:
+        await message.answer(f"🎤 Расшифровка встречи готова!\nСсылка: {summarization_url}\n"
+                             f"Скачайте файл и отправьте мне, чтобы я создал задачи.")
+        # Здесь можно добавить автоматическое скачивание файла по ссылке
+    else:
+        await message.answer("⚠️ Расшифровка не появилась за отведённое время.\n"
+                             "Попробуйте позже или загрузите файл вручную.")
+
+async def connect_to_meet_only(meet_url: str, duration_seconds: int) -> bool:
+    """Подключается к встрече и ждёт duration_seconds, не выполняя запись."""
+    env = os.environ.copy()
+    env['DISPLAY'] = ':99'
+    env['PULSE_SERVER'] = env.get('PULSE_SERVER', 'unix:/var/run/pulse/native')
+    try:
+        from playwright.async_api import async_playwright
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=False,
+                env=env,
+                args=[
+                    "--use-fake-ui-for-media-stream",
+                    "--disable-web-security",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--autoplay-policy=no-user-gesture-required",
+                    "--disable-background-timer-throttling",
+                ]
+            )
+            context = await browser.new_context(viewport={'width': 1280, 'height': 720})
+            page = await context.new_page()
+            await page.goto(meet_url)
+            # Нажать кнопку подключения (без неё не войдём)
+            try:
+                join_button = await page.wait_for_selector('[data-testid="enter-conference-button"]', timeout=30000)
+                await join_button.click(force=True)
+                logger.info("Кнопка подключения нажата")
+            except Exception as e:
+                logger.error(f"Не удалось нажать кнопку подключения: {e}")
+                await browser.close()
+                return False
+            await asyncio.sleep(duration_seconds)
+            await browser.close()
+            return True
+    except Exception as e:
+        logger.error(f"Ошибка в connect_to_meet_only: {e}")
+        return False
 
 # ---------- Тестовые сценарии ----------
 class ManagerTest(StatesGroup):
