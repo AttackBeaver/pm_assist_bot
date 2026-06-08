@@ -32,8 +32,8 @@ async def capture_audio_with_ffmpeg(duration_seconds: int, output_path: str) -> 
         "-i", "meet_sink.monitor",   # используем монитор нашего sink-а
         "-t", str(duration_seconds),
         "-acodec", "pcm_s16le",
-        "-ar", "44100",
-        "-ac", "2",
+        "-ar", "16000",
+        "-ac", "1",
         output_path
     ]
     try:
