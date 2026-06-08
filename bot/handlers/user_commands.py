@@ -82,11 +82,14 @@ def _main_keyboard() -> ReplyKeyboardMarkup:
 
 
 def _cabinet_url_text(telegram_id: int) -> str:
-    return f"{WEB_BASE_URL}/cabinet/{telegram_id}"
+    # Убираем trailing slash, если есть, и формируем правильный URL
+    base = WEB_BASE_URL.rstrip('/')
+    return f"{base}/cabinet/{telegram_id}"
 
 
 def _cabinet_inline(telegram_id: int) -> Optional[InlineKeyboardMarkup]:
     url = _cabinet_url_text(telegram_id)
+    # Всегда показываем кнопку, если URL не localhost
     if "localhost" in WEB_BASE_URL or "127.0.0.1" in WEB_BASE_URL:
         return None
     return InlineKeyboardMarkup(inline_keyboard=[[
@@ -136,7 +139,8 @@ async def cmd_help(message: Message) -> None:
 
         "🎙 **Встречи и расшифровка:**\n"
         "• Отправьте **ссылку на Яндекс Телемост** в любой чат — я автоматически запишу встречу (60 секунд), распознаю речь и создам задачи.\n"
-        "• Нажмите кнопку **«📞 Встреча»** — появятся альтернативные способы (загрузить файл, ссылка на Яндекс.Диск, mymeet.ai, Playwright).\n\n"
+        "• Нажмите кнопку **«📞 Встреча»** — доступны также загрузка аудио/видео файлов и ссылки на Яндекс.Диск.\n"
+        "• Возможны альтернативные способы (mymeet.ai, Playwright) — подробности в меню «📞 Встреча».\n\n"
 
         "🛠 **Настройки:**\n"
         "• `/away [причина]` — временно отключить назначение задач (на 7 дней)\n"
@@ -144,6 +148,9 @@ async def cmd_help(message: Message) -> None:
 
         "✍️ **Пример задачи:**\n"
         "`@сотрудник нужно сделать отчёт до пятницы`\n\n"
+
+        "📢 **Важно:** Для работы функций, требующих записи встреч, необходимо, чтобы бот был подключён к серверу с возможностью захвата звука. "
+        "При стандартном использовании через загрузку файлов ограничений нет.\n\n"
         "По всем вопросам: @attack_beaver",
         parse_mode="Markdown",
         reply_markup=_main_keyboard()
@@ -209,7 +216,7 @@ async def cmd_cabinet(message: Message) -> None:
     await message.answer(text, parse_mode="Markdown", reply_markup=inline_kb)
 
 
-# Обработчики инлайн-кнопок из личного кабинета
+# Обработчики инлайн-кнопок из личного кабинета (остаются без изменений, они рабочие)
 @router.callback_query(lambda c: c.data == "cabinet_stats")
 async def cabinet_stats_callback(callback: CallbackQuery):
     await callback.answer()
@@ -561,12 +568,12 @@ async def cmd_join_meet(message: Message, bot: Bot) -> None:
         [InlineKeyboardButton(text="🎧 Автоподключение (Playwright)", callback_data="meet_playwright")],
     ])
     await message.answer(
-        "Выберите способ обработки встречи:\n\n"
-        "• **Загрузить файл** – отправьте аудио/видео запись (работает всегда)\n"
-        "• **Ссылка на Яндекс.Диск** – укажите публичную ссылку на файл\n"
-        "• **mymeet.ai** – автоматическое подключение (требует API-ключ)\n"
-        "• **Playwright** – автономное подключение (требует выделенный сервер с PulseAudio)\n\n"
-        "➡️ **Самый простой способ:** просто отправьте ссылку на Яндекс Телемост в чат — бот обработает её автоматически!",
+        "🎙 **Как обработать встречу?**\n\n"
+        "1️⃣ **Загрузить файл** – отправьте аудио/видео запись (работает всегда).\n"
+        "2️⃣ **Ссылка на Яндекс.Диск** – укажите публичную ссылку на файл.\n"
+        "3️⃣ **mymeet.ai** – автоматическое подключение (требует API‑ключ).\n"
+        "4️⃣ **Playwright** – автономное подключение (требует выделенный сервер).\n\n"
+        "⚡ **Самый простой способ:** просто отправьте ссылку на Яндекс Телемост в этот чат – бот обработает её автоматически!",
         parse_mode="Markdown",
         reply_markup=keyboard
     )
@@ -603,12 +610,11 @@ async def meet_mymeet_callback(callback: CallbackQuery):
         await callback.message.edit_text(
             "⚠️ **Автоматическое подключение через mymeet.ai требует настройки**\n\n"
             "Для использования этой функции необходимо:\n"
-            "1. Заключить корпоративный договор с сервисом [mymeet.ai](https://mymeet.ai)\n"
-            "2. Получить API‑ключ и указать его в переменной окружения `MYMEET_API_KEY`\n\n"
+            "• Заключить корпоративный договор с сервисом [mymeet.ai](https://mymeet.ai)\n"
+            "• Получить API‑ключ и указать его в переменной окружения `MYMEET_API_KEY`\n\n"
             "После этого бот сможет автоматически подключаться к встречам на "
             "Яндекс Телемост, Zoom, Google Meet, Microsoft Teams и др.\n\n"
-            "**Альтернатива (уже работает):** загрузите запись встречи файлом или ссылкой, "
-            "или просто отправьте ссылку на Яндекс Телемост в чат.",
+            "✅ **Альтернативы (уже работают):** загрузка файлов, ссылки на Яндекс.Диск, автоматическое распознавание ссылок на Телемост.",
             parse_mode="Markdown",
             disable_web_page_preview=True
         )
@@ -627,27 +633,26 @@ async def meet_playwright_callback(callback: CallbackQuery):
     await callback.answer()
     if not MEET_AUTOMATION_AVAILABLE:
         await callback.message.edit_text(
-            "⚠️ **Автоматическое подключение через Playwright недоступно**\n\n"
-            "Этот модуль требует выделенного сервера с установленным PulseAudio "
-            "и доступом к звуковому устройству (loopback).\n\n"
+            "⚠️ **Автоподключение через Playwright требует выделенного сервера**\n\n"
+            "Этот способ работает только на VPS с настроенным звуком.\n"
             "На текущем хостинге функция отключена.\n\n"
-            "**Альтернатива:** загрузите запись встречи файлом или ссылкой на Яндекс.Диск, "
+            "✅ **Рекомендуемая альтернатива:** загрузите запись встречи файлом или укажите ссылку на Яндекс.Диск, "
             "или просто отправьте ссылку на Яндекс Телемост в чат."
         )
         return
     await callback.message.edit_text(
-        "🎧 **Автоматическое подключение через Playwright + ffmpeg**\n\n"
+        "🎧 **Автоматическое подключение через Playwright**\n\n"
         "Отправьте ссылку на встречу в формате:\n"
         "`/join_meet_auto https://telemost.yandex.ru/... 120`\n\n"
         "Бот откроет браузер, подключится к встрече, запишет звук, распознает речь и создаст задачи.\n\n"
-        "⚠️ Требуется сервер с PulseAudio и X11 (или XVFB)."
+        "📌 Требуется сервер с PulseAudio и X11 (или XVFB)."
     )
 
 
 # ---------- Основная команда для автоматической записи встречи (Playwright) ----------
 @router.message(Command("join_meet_auto"))
 async def cmd_join_meet_auto(message: Message, bot: Bot):
-    """Автоматическое подключение к встрече через Playwright (только для продвинутых)."""
+    """Автоматическое подключение к встрече через Playwright."""
     if not MEET_AUTOMATION_AVAILABLE:
         await message.answer("❌ Playwright автоматизация недоступна на этом сервере.")
         return
