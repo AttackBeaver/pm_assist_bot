@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 import re
@@ -11,10 +12,11 @@ from bot.utils.date_utils import deadline_to_timestamp
 from bot.utils.yougile_utils import create_yougile_task
 from bot.utils.meet_utils import process_meet_link
 from web.database import add_user, add_task, get_telegram_id_by_username
+from bot.utils.meet_processor import process_meeting
 
 logger = logging.getLogger(__name__)
 router = Router()
-_CONFIDENCE_THRESHOLD = 70
+_CONFIDENCE_THRESHOLD = 85
 
 
 async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | None:
@@ -35,21 +37,30 @@ async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | Non
 
 @router.message(F.text, F.chat.type.in_({"group", "supergroup"}))
 async def handle_text_message(message: Message, bot: Bot) -> None:
-    # Проверяем, не ссылка ли это на Яндекс.Диск
+    # Ссылка на Яндекс.Диск
     yandex_link_match = re.search(r'(https?://disk\.yandex\.(?:ru|com)/(?:i|d|public)/[^\s]+)', message.text)
     if yandex_link_match:
         await process_meet_link(yandex_link_match.group(1), message, bot)
         return
 
+    # Ссылка на Яндекс Телемост
+    telemost_match = re.search(r'(https?://telemost\.yandex\.ru/j/\S+)', message.text)
+    if telemost_match:
+        meet_url = telemost_match.group(1)
+        await message.reply("🔗 Обнаружена ссылка на Яндекс Телемост. Начинаю запись (60 секунд)...")
+        asyncio.create_task(process_meeting(meet_url, 60, message, bot))
+        return
+
     # Регистрируем автора
     add_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
 
-    # ----- ГИБРИДНЫЙ ПАРСИНГ -----
+    # Гибридный парсинг: сначала LLM
     llm_result = parse_task_with_llm(message.text)
     if llm_result and llm_result.get("confidence", 0) >= _CONFIDENCE_THRESHOLD:
         parse_result = llm_result
         logger.info(f"✅ Распознано через LLM: confidence={parse_result['confidence']}")
     else:
+        # Fallback на regex (только если LLM не сработал)
         parse_result = regex_parse_task(message.text, known_usernames=[])
         logger.info(f"🔄 Fallback на regex: confidence={parse_result['confidence']}")
 
@@ -91,7 +102,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
             chat_id=message.chat.id,
         )
 
-        # --- Отправка личных уведомлений (как было ранее) ---
+        # Уведомления
         if responsible_id == author_id:
             keyboard = InlineKeyboardBuilder()
             keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
@@ -142,7 +153,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
             except Exception as e:
                 logger.error(f"Не удалось отправить уведомление автору {author_id}: {e}")
 
-    # Ответ в группе (только текст)
+    # Ответ в группе
     reply_text = (
         f"✅ Задача автоматически создана в YouGile!\n\n"
         f"📋 {parse_result['task']}\n"

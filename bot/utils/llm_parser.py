@@ -64,15 +64,28 @@ def parse_task_with_llm(text: str) -> Optional[Dict[str, Any]]:
     if not client:
         return None
 
-    # НОВЫЙ СИСТЕМНЫЙ ПРОМПТ (более строгий)
+    # Улучшенный системный промпт
     system_prompt = """
 Ты — ассистент по управлению задачами. Из текста сообщения извлеки задачу, дедлайн и ответственных.
 Правила:
-- Если сообщение является вопросом (содержит вопросительные слова: зачем, почему, где, как, кто, когда или знак вопроса), шуткой, приветствием, пустым, бессмысленным или не содержит явного указания на действие (сделать, подготовить, отправить, создать, обновить, проверить, организовать, купить, заказать и т.п.), то верни {"task": null, "deadline": null, "assignees": []}.
-- Если сообщение содержит стоп-слова (список: привет, пока, как дела, спасибо, отправь файлы и т.п.) – тоже возвращай null.
-- Ответ должен быть только в формате JSON, без дополнительных комментариев.
+- Задача должна содержать **глагол действия**: сделать, подготовить, написать, обновить, проверить, отправить, создать, организовать, купить, заказать и т.п.
+- Если в сообщении нет глагола действия, нет @упоминания, нет указания на срок → верни null.
+- Игнорируй вопросы, уточнения, бытовые фразы ("доброе утро", "до 23:59", "как дела", "спасибо").
+- Если сообщение похоже на задачу, извлеки:
+   * task: краткая формулировка (без лишних слов)
+   * deadline: дата/время в понятном формате (если есть)
+   * assignees: список username (без @)
+- Думай логически, это должно быть похоже на задачу.
+- Ответ должен быть ТОЛЬКО в формате JSON, без дополнительных комментариев.
+
+Примеры:
+Пользователь: "до 23:59"
+Ответ: {"task": null, "deadline": null, "assignees": []}
+
+Пользователь: "@ivan нужно сделать отчёт до пятницы"
+Ответ: {"task": "сделать отчёт", "deadline": "пятница", "assignees": ["ivan"]}
 """
-    prompt = f"Сообщение: {text}"
+    prompt = f"Пользователь: {text}"
     response = client.generate_text(prompt, system_prompt=system_prompt)
     if not response:
         return None
@@ -86,29 +99,15 @@ def parse_task_with_llm(text: str) -> Optional[Dict[str, Any]]:
         if not isinstance(assignees, list):
             assignees = [assignees] if assignees else []
 
-        # ----- ПОСТ-ВАЛИДАЦИЯ (ужесточённая) -----
-        # 1. Проверка на пустую задачу
-        if not task or len(task.strip()) < 5:
+        # Пост-валидация
+        if not task or len(task.strip()) < 4:
             return None
 
-        # 2. Проверка на наличие стоп-слов в исходном тексте
         lower_text = text.lower()
         for sw in _STOP_WORDS:
             if re.search(rf'\b{re.escape(sw)}\b', lower_text):
-                logger.info(f"Сообщение содержит стоп-слово '{sw}' – игнорируем")
+                logger.info(f"Стоп-слово '{sw}' – игнорируем")
                 return None
-
-        # 3. Проверка на вопрос (без ключевых слов)
-        has_question = bool(re.search(r'[?؟]|\b(?:когда|зачем|почему|где|что за|как|кто)\b', lower_text))
-        has_keyword = any(re.search(rf'\b{kw}\b', lower_text) for kw in _TASK_KEYWORDS)
-        if has_question and not has_keyword and not deadline and not assignees:
-            logger.info("Сообщение является вопросом без ключевых слов – игнорируем")
-            return None
-
-        # 4. Если задача слишком общая и не содержит глаголов действия
-        action_words = ["сделать", "подготовить", "написать", "обновить", "проверить", "отправить", "создать", "организовать"]
-        if not any(word in task.lower() for word in action_words) and len(task.split()) <= 3:
-            return None
 
         return {
             "task": task,
@@ -119,3 +118,15 @@ def parse_task_with_llm(text: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Ошибка парсинга JSON из LLM: {e}\nОтвет: {response}")
         return None
+
+
+def summarize_text(text: str) -> Optional[str]:
+    client = get_client()
+    if not client:
+        return None
+    prompt = f"Сделай краткое саммари (3-5 предложений) следующего текста встречи:\n\n{text}"
+    system_prompt = "Ты — ассистент, пишущий саммари. Ответ должен быть только текст саммари, без лишних слов."
+    response = client.generate_text(prompt, system_prompt=system_prompt, temperature=0.3)
+    if response:
+        return response.strip()
+    return None

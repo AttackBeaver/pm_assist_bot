@@ -2,6 +2,7 @@ import asyncio
 import os
 import logging
 import base64
+import uuid
 from typing import Optional
 from playwright.async_api import async_playwright
 
@@ -48,23 +49,18 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
             await browser.close()
             return False
 
-        # Ожидаем появления аудиоэлемента (WebRTC подключение)
-        try:
-            await page.wait_for_selector('audio', timeout=15000)
-            logger.info("Аудиоэлемент найден")
-        except:
-            logger.warning("Аудиоэлемент не найден, возможно, WebRTC ещё не готов")
-            await asyncio.sleep(5)
+        # Уменьшенное ожидание (5 секунд вместо 10)
+        await asyncio.sleep(5)
 
         # JavaScript для захвата аудио через MediaRecorder
         capture_js = """
         async (durationSec) => {
-            const audioElement = document.querySelector('audio');
-            if (!audioElement) throw new Error('Аудиоэлемент не найден');
-            // Убеждаемся, что звук не отключён
-            audioElement.muted = false;
-            audioElement.volume = 1;
-            const stream = audioElement.captureStream();
+            let mediaElement = document.querySelector('audio');
+            if (!mediaElement) mediaElement = document.querySelector('video');
+            if (!mediaElement) throw new Error('Аудио/видео элемент не найден');
+            mediaElement.muted = false;
+            mediaElement.volume = 1;
+            const stream = mediaElement.captureStream();
             const audioTracks = stream.getAudioTracks();
             if (audioTracks.length === 0) throw new Error('Нет аудиодорожек');
             const mediaRecorder = new MediaRecorder(stream);
@@ -104,12 +100,12 @@ async def join_and_record_meet(meet_url: str, duration_seconds: int, output_wav_
 
         base64_data = audio_data_url.split(",")[1]
         webm_data = base64.b64decode(base64_data)
-        temp_webm = f"/tmp/meet_audio_{asyncio.current_task().get_name()}.webm"
+        temp_webm = f"/tmp/meet_audio_{uuid.uuid4().hex}.webm"
         with open(temp_webm, "wb") as f:
             f.write(webm_data)
         logger.info(f"Аудио WebM сохранён: {temp_webm}, размер: {len(webm_data)} байт")
 
-        # Конвертируем WebM -> WAV (16кГц, моно)
+        # Конвертация в WAV
         import subprocess
         cmd = [
             "ffmpeg", "-y",

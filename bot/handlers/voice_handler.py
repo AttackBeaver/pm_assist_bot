@@ -18,7 +18,7 @@ from web.database import add_user, add_task, get_telegram_id_by_username, add_ta
 
 logger = logging.getLogger(__name__)
 router = Router()
-_CONFIDENCE_THRESHOLD = 70
+_CONFIDENCE_THRESHOLD = 85
 _MAX_FILE_SIZE = 20 * 1024 * 1024
 _MAX_DOWNLOAD_SIZE = 200 * 1024 * 1024
 
