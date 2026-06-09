@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+from typing import Optional, List
 from yougile_client import YouGileClient
 from config import YOUGILE_TOKEN, YOUGILE_BOARD_ID, YOUGILE_TO_COLUMN_ID
 from bot.utils.date_utils import deadline_to_timestamp
@@ -10,6 +10,7 @@ async def create_yougile_task(
     title: str,
     description: str,
     deadline_str: Optional[str] = None,
+    assignee_user_ids: Optional[List[int]] = None,   # добавлен параметр
 ) -> Optional[str]:
     if not YOUGILE_TOKEN or not YOUGILE_BOARD_ID:
         logger.error("YouGile не настроен")
@@ -21,7 +22,6 @@ async def create_yougile_task(
         if not columns:
             logger.error("Не удалось получить колонки YouGile")
             return None
-        # Ищем колонку "Сделать" или "To do"
         for col in columns:
             title_lower = col.get("title", "").lower()
             if "сделать" in title_lower or "to do" in title_lower:
@@ -31,5 +31,6 @@ async def create_yougile_task(
             logger.warning("Колонка 'Сделать' не найдена, берём первую")
             column_id = columns[0]["id"]
     deadline_ts = deadline_to_timestamp(deadline_str) if deadline_str else None
-    result = client.create_task(title, column_id, description, deadline_timestamp=deadline_ts)
+    # Передаём assignee_user_ids в YouGile (может быть None или список)
+    result = client.create_task(title, column_id, description, assigned_user_ids=assignee_user_ids, deadline_timestamp=deadline_ts)
     return result.get("id") if result else None

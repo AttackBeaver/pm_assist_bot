@@ -52,8 +52,33 @@ def init_db() -> None:
             changed_at TEXT NOT NULL,
             comment TEXT
         );
+        -- НОВОЕ: таблица для напоминаний о встречах
+        CREATE TABLE IF NOT EXISTS meeting_reminders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER,
+            meet_url TEXT,
+            remind_at TIMESTAMP,
+            notified INTEGER DEFAULT 0
+        );
+        -- НОВОЕ: таблица для вечерних синхронизаций (отчётов)
+        CREATE TABLE IF NOT EXISTS report_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER,
+            date TEXT,
+            status TEXT DEFAULT 'active',
+            started_at TIMESTAMP,
+            closed_at TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS user_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER,
+            user_id INTEGER,
+            report_text TEXT,
+            submitted_at TIMESTAMP,
+            processed INTEGER DEFAULT 0
+        );
         ''')
-        # Миграции
+        # Миграции (существующие)
         try:
             conn.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT")
         except sqlite3.OperationalError:
@@ -184,14 +209,12 @@ def get_all_active_tasks() -> List[Dict[str, Any]]:
 def get_tasks_with_upcoming_deadline(hours_before: int = 2) -> List[Dict[str, Any]]:
     now_ms = int(datetime.now().timestamp() * 1000)
     threshold_ms = now_ms + hours_before * 3_600_000
-    # Игнорируем задачи, о которых напоминали в последние 6 часов
     six_hours_ago = (datetime.now() - timedelta(hours=6)).isoformat()
     return [t for t in get_all_active_tasks()
             if t["deadline_timestamp"] and now_ms < t["deadline_timestamp"] <= threshold_ms
             and (t.get("last_reminded_at") is None or t["last_reminded_at"] < six_hours_ago)]
 
 def mark_task_reminded(task_id: str) -> None:
-    """Отмечает, что напоминание по задаче было отправлено."""
     with _connect() as conn:
         conn.execute("UPDATE tasks SET last_reminded_at = ? WHERE id = ?",
                      (datetime.now().isoformat(), task_id))
@@ -204,20 +227,21 @@ def complete_task(task_id: str) -> None:
     with _connect() as conn:
         conn.execute("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?",
                      (datetime.now().isoformat(), task_id))
-    update_user_stats(responsible_id, xp_delta=10, tasks_completed_delta=1)
-    new_achievements = []
-    with _connect() as conn:
-        count = conn.execute(
-            "SELECT COUNT(*) FROM tasks WHERE responsible_telegram_id = ? AND status = 'completed'",
-            (responsible_id,)
-        ).fetchone()[0]
-    if count >= 3:
-        new_achievements.append("Спринтер")
-    stats = get_user_stats(responsible_id)
-    if stats["level"] >= 2:
-        new_achievements.append("Мастер")
-    if new_achievements:
-        update_user_stats(responsible_id, achievements_to_add=new_achievements)
+    if responsible_id:
+        update_user_stats(responsible_id, xp_delta=10, tasks_completed_delta=1)
+        new_achievements = []
+        with _connect() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM tasks WHERE responsible_telegram_id = ? AND status = 'completed'",
+                (responsible_id,)
+            ).fetchone()[0]
+        if count >= 3:
+            new_achievements.append("Спринтер")
+        stats = get_user_stats(responsible_id)
+        if stats["level"] >= 2:
+            new_achievements.append("Мастер")
+        if new_achievements:
+            update_user_stats(responsible_id, achievements_to_add=new_achievements)
 
 def delete_task(task_id: str) -> None:
     with _connect() as conn:
@@ -307,7 +331,7 @@ def get_telegram_id_by_username(username: str) -> Optional[int]:
         ).fetchone()
         return row["telegram_id"] if row else None
 
-# --- Расширенный трекинг скорости и качества ---
+# --- Расширенный трекинг ---
 def get_on_time_completion_rate(telegram_id: int) -> float:
     with _connect() as conn:
         rows = conn.execute(
@@ -361,3 +385,70 @@ def get_task_status_counts(telegram_id: int) -> Dict[str, int]:
             (telegram_id,)
         ).fetchall()
     return {row["status"]: row["cnt"] for row in rows}
+
+# ========== НОВЫЕ ФУНКЦИИ ==========
+# --- Напоминания о встречах ---
+def add_meeting_reminder(chat_id: int, meet_url: str, remind_at: datetime) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO meeting_reminders (chat_id, meet_url, remind_at, notified) VALUES (?, ?, ?, 0)",
+            (chat_id, meet_url, remind_at.isoformat())
+        )
+
+def get_due_meeting_reminders() -> List[Dict[str, Any]]:
+    now = datetime.now().isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, chat_id, meet_url, remind_at FROM meeting_reminders WHERE notified = 0 AND remind_at <= ?",
+            (now,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+def mark_meeting_reminder_notified(reminder_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE meeting_reminders SET notified = 1 WHERE id = ?", (reminder_id,))
+
+# --- Отчётные сессии ---
+def create_report_session(chat_id: int, date: str) -> int:
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO report_sessions (chat_id, date, status, started_at) VALUES (?, ?, 'active', ?)",
+            (chat_id, date, datetime.now().isoformat())
+        )
+        return cur.lastrowid
+
+def close_report_session(session_id: int) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE report_sessions SET status = 'closed', closed_at = ? WHERE id = ?",
+            (datetime.now().isoformat(), session_id)
+        )
+
+def get_active_report_session(chat_id: int) -> Optional[Dict[str, Any]]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, date, started_at FROM report_sessions WHERE chat_id = ? AND status = 'active'",
+            (chat_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+def add_user_report(session_id: int, user_id: int, report_text: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO user_reports (session_id, user_id, report_text, submitted_at) VALUES (?, ?, ?, ?)",
+            (session_id, user_id, report_text, datetime.now().isoformat())
+        )
+
+def get_users_without_report(session_id: int, chat_members_ids: List[int]) -> List[int]:
+    with _connect() as conn:
+        reported = conn.execute(
+            "SELECT user_id FROM user_reports WHERE session_id = ?", (session_id,)
+        ).fetchall()
+        reported_ids = {row["user_id"] for row in reported}
+        return [uid for uid in chat_members_ids if uid not in reported_ids]
+
+def get_all_chat_ids() -> List[int]:
+    """Возвращает список chat_id, где когда-либо создавались задачи."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT DISTINCT chat_id FROM tasks WHERE chat_id IS NOT NULL").fetchall()
+        return [row["chat_id"] for row in rows]

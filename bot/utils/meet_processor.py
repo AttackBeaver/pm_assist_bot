@@ -47,23 +47,19 @@ async def process_meeting(meet_url: str, duration: int, original_message: Messag
         if summary:
             await bot.send_message(chat_id, f"📝 **Краткое саммари встречи:**\n{summary}")
 
-        # --- ИЗВЛЕЧЕНИЕ ЗАДАЧ (поддерживается список) ---
         tasks_list = None
 
-        # 1. Пробуем извлечь из транскрипции через YandexGPT
         llm_result = parse_task_with_llm(transcribed_text)
         if llm_result and isinstance(llm_result, list) and len(llm_result) > 0:
             tasks_list = llm_result
             logger.info(f"Извлечено {len(tasks_list)} задач из транскрипции через LLM")
 
-        # 2. Если не удалось, пробуем извлечь из саммари через YandexGPT
         if not tasks_list and summary:
             llm_from_summary = parse_task_with_llm(summary)
             if llm_from_summary and isinstance(llm_from_summary, list) and len(llm_from_summary) > 0:
                 tasks_list = llm_from_summary
                 logger.info(f"Извлечено {len(tasks_list)} задач из саммари через LLM")
 
-        # 3. Fallback на regex (одиночная задача)
         if not tasks_list:
             regex_result = regex_parse_task(transcribed_text, known_usernames=[])
             if regex_result["confidence"] >= 70:
@@ -80,23 +76,26 @@ async def process_meeting(meet_url: str, duration: int, original_message: Messag
             return
 
         author_id = user_id
-        all_created_tasks = []  # (task_title, assignee_username)
+        all_created_tasks = []
 
         for parse_result in tasks_list:
             assignee_usernames = parse_result.get("assignees", []) or [None]
 
             for assignee in assignee_usernames:
-                responsible_id = author_id
+                # ИЗМЕНЕНИЕ: ответственный по умолчанию None
+                responsible_id = None
                 if assignee:
                     clean = assignee.lstrip('@')
                     found_id = get_telegram_id_by_username(clean)
                     if found_id:
                         responsible_id = found_id
 
+                assignee_ids = [responsible_id] if responsible_id else []
                 card_id = await create_yougile_task(
                     title=parse_result["task"],
                     description=transcribed_text,
                     deadline_str=parse_result["deadline"],
+                    assignee_user_ids=assignee_ids
                 )
                 if card_id:
                     task_uuid = str(uuid.uuid4())
@@ -112,11 +111,25 @@ async def process_meeting(meet_url: str, duration: int, original_message: Messag
                         chat_id=chat_id,
                     )
                     add_task_history(task_uuid, 'pending', comment='Задача из встречи')
-                    all_created_tasks.append((parse_result["task"], assignee))
+                    all_created_tasks.append((parse_result["task"], assignee, task_uuid, responsible_id))
 
-                    # Отправка уведомлений
+                    # Уведомления
                     assignee_str = f"@{assignee}" if assignee else "вы"
-                    if responsible_id == author_id:
+                    if responsible_id is None:
+                        keyboard = InlineKeyboardBuilder()
+                        keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
+                        keyboard.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
+                        keyboard.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
+                        keyboard.adjust(1)
+                        await bot.send_message(
+                            author_id,
+                            f"📌 Вы создали задачу (без исполнителя) из встречи:\n\n"
+                            f"📋 {parse_result['task']}\n"
+                            f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n\n"
+                            f"Вы можете взять задачу в работу или назначить исполнителя в YouGile.",
+                            reply_markup=keyboard.as_markup()
+                        )
+                    elif responsible_id == author_id:
                         keyboard = InlineKeyboardBuilder()
                         keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
                         keyboard.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
@@ -156,21 +169,19 @@ async def process_meeting(meet_url: str, duration: int, original_message: Messag
                             reply_markup=keyboard_author.as_markup()
                         )
 
-        # Формирование финального ответа
         if not all_created_tasks:
             await bot.send_message(chat_id, "❌ Не удалось создать задачи в YouGile.")
             return
 
-        # Получаем уникальные ответственные для красивого вывода
         unique_assignees = set()
-        for _, assignee in all_created_tasks:
+        for _, assignee, _, _ in all_created_tasks:
             if assignee:
                 unique_assignees.add(f"@{assignee}")
         assignees_display = ', '.join(sorted(unique_assignees)) if unique_assignees else 'не назначены'
 
         reply = f"🎤 **Встреча обработана!**\n\n"
         reply += f"📝 **Задачи:**\n"
-        for i, (task_title, assignee) in enumerate(all_created_tasks, 1):
+        for i, (task_title, assignee, _, responsible_id) in enumerate(all_created_tasks, 1):
             assignee_str = f"@{assignee}" if assignee else "не назначен"
             reply += f"{i}. {task_title} (ответственный: {assignee_str})\n"
         reply += f"\n👥 **Общие ответственные:** {assignees_display}\n"

@@ -11,8 +11,10 @@ from bot.utils.llm_parser import parse_task_with_llm
 from bot.utils.date_utils import deadline_to_timestamp
 from bot.utils.yougile_utils import create_yougile_task
 from bot.utils.meet_utils import process_meet_link
-from web.database import add_user, add_task, get_telegram_id_by_username
+from web.database import add_user, add_task, get_telegram_id_by_username, add_meeting_reminder
 from bot.utils.meet_processor import process_meeting
+from datetime import datetime, timedelta
+import re
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -34,6 +36,33 @@ async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | Non
         pass
     return None
 
+# НОВОЕ: парсинг времени встречи из текста
+def parse_meeting_time(text: str) -> datetime | None:
+    """
+    Ищет в тексте указание времени встречи (например, "в 15:30", "через 20 минут").
+    Возвращает datetime (с сегодняшним днём) или None.
+    """
+    now = datetime.now()
+    # 1. "в 15:30" или "в 15-30"
+    match = re.search(r'(?:в|встреча)\s+(\d{1,2})[:.-](\d{2})', text.lower())
+    if match:
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if dt < now:
+            dt += timedelta(days=1)
+        return dt
+    # 2. "через N минут"
+    match = re.search(r'через\s+(\d+)\s+минут', text.lower())
+    if match:
+        minutes = int(match.group(1))
+        return now + timedelta(minutes=minutes)
+    # 3. "через N часов"
+    match = re.search(r'через\s+(\d+)\s+часов?', text.lower())
+    if match:
+        hours = int(match.group(1))
+        return now + timedelta(hours=hours)
+    return None
 
 @router.message(F.text, F.chat.type.in_({"group", "supergroup"}))
 async def handle_text_message(message: Message, bot: Bot) -> None:
@@ -47,6 +76,13 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     telemost_match = re.search(r'(https?://telemost\.yandex\.ru/j/\S+)', message.text)
     if telemost_match:
         meet_url = telemost_match.group(1)
+        # НОВОЕ: пытаемся определить время встречи для напоминания
+        meeting_time = parse_meeting_time(message.text)
+        if meeting_time:
+            remind_at = meeting_time - timedelta(minutes=10)
+            if remind_at > datetime.now():
+                add_meeting_reminder(message.chat.id, meet_url, remind_at)
+                await message.reply(f"🔔 Напомню о встрече за 10 минут (в {remind_at.strftime('%H:%M')}).")
         await message.reply("🔗 Обнаружена ссылка на Яндекс Телемост. Начинаю запись (60 секунд)...")
         asyncio.create_task(process_meeting(meet_url, 60, message, bot))
         return
@@ -60,7 +96,6 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         parse_result = llm_result
         logger.info(f"✅ Распознано через LLM: confidence={parse_result['confidence']}")
     else:
-        # Fallback на regex (только если LLM не сработал)
         parse_result = regex_parse_task(message.text, known_usernames=[])
         logger.info(f"🔄 Fallback на regex: confidence={parse_result['confidence']}")
 
@@ -74,16 +109,21 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     author_id = message.from_user.id
 
     for assignee_username in assignee_usernames:
-        responsible_id = author_id
+        # ИЗМЕНЕНИЕ: если нет ответственного, responsible_id = None
+        responsible_id = None
         if assignee_username:
             found_id = await ensure_user_exists(assignee_username, bot, message.chat.id)
             if found_id:
                 responsible_id = found_id
+        # Если assignee_username нет, responsible_id остаётся None
 
+        # В YouGile передаём список ID ответственных (или пустой список)
+        assignee_ids = [responsible_id] if responsible_id else []
         card_id = await create_yougile_task(
             title=parse_result["task"],
             description=message.text,
             deadline_str=parse_result["deadline"],
+            assignee_user_ids=assignee_ids
         )
         if not card_id:
             await message.reply("❌ Не удалось создать задачу в YouGile.")
@@ -94,7 +134,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
             task_id=task_uuid,
             title=parse_result["task"],
             description=message.text,
-            responsible_telegram_id=responsible_id,
+            responsible_telegram_id=responsible_id,  # может быть None
             author_telegram_id=author_id,
             deadline=parse_result["deadline"],
             deadline_timestamp=deadline_to_timestamp(parse_result["deadline"]) if parse_result["deadline"] else None,
@@ -103,7 +143,26 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         )
 
         # Уведомления
-        if responsible_id == author_id:
+        if responsible_id is None:
+            # Нет ответственного – уведомляем только автора с пометкой "без исполнителя"
+            keyboard = InlineKeyboardBuilder()
+            keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
+            keyboard.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
+            keyboard.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
+            keyboard.adjust(1)
+            try:
+                await bot.send_message(
+                    author_id,
+                    f"📌 Вы создали задачу (без исполнителя):\n\n"
+                    f"📋 {parse_result['task']}\n"
+                    f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n"
+                    f"👥 Ответственные: не назначены\n\n"
+                    f"Вы можете взять задачу в работу или назначить исполнителя в YouGile.",
+                    reply_markup=keyboard.as_markup()
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отправить уведомление автору {author_id}: {e}")
+        elif responsible_id == author_id:
             keyboard = InlineKeyboardBuilder()
             keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
             keyboard.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")

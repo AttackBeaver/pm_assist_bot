@@ -22,9 +22,7 @@ _CONFIDENCE_THRESHOLD = 85
 _MAX_FILE_SIZE = 20 * 1024 * 1024
 _MAX_DOWNLOAD_SIZE = 200 * 1024 * 1024
 
-# Поддерживаемые расширения для обработки
 SUPPORTED_EXTENSIONS = {'webm', 'mp4', 'ogg', 'mp3', 'wav', 'aac', 'wma', 'avi', 'mov', 'mkv'}
-
 
 async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | None:
     clean = username.lstrip('@')
@@ -41,14 +39,10 @@ async def ensure_user_exists(username: str, bot: Bot, chat_id: int) -> int | Non
         pass
     return None
 
-
 def is_supported_audio_video_file(file_path: str) -> bool:
-    """Проверяет, является ли файл поддерживаемым аудио/видео по расширению."""
     ext = os.path.splitext(file_path)[1].lower().lstrip('.')
     return ext in SUPPORTED_EXTENSIONS
 
-
-# ---------- Обработчик ссылок на Яндекс.Диск (только личные сообщения) ----------
 @router.message(F.text, F.chat.type == "private")
 async def handle_yadisk_link(message: Message, bot: Bot) -> None:
     text = message.text
@@ -61,16 +55,13 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
 
     direct_link = extract_yadisk_direct_link(url)
     if not direct_link:
-        # Тихо игнорируем, если не удалось получить прямую ссылку (например, папка)
         logger.info(f"Не удалось получить прямую ссылку для {url}, игнорируем")
         return
 
-    # Проверяем Content-Type перед скачиванием
     try:
         head_resp = requests.head(direct_link, timeout=10)
         if head_resp.status_code == 200:
             content_type = head_resp.headers.get('content-type', '').lower()
-            # Проверяем, что это аудио или видео
             if not ('audio' in content_type or 'video' in content_type):
                 logger.info(f"Файл по ссылке {url} имеет тип {content_type}, не аудио/видео, игнорируем")
                 await message.answer("ℹ️ По ссылке найден файл, но он не является аудио или видео. Я обрабатываю только аудио/видео записи.")
@@ -93,7 +84,6 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
             os.remove(temp_path)
         return
 
-    # Дополнительная проверка после скачивания
     if not is_supported_audio_video_file(temp_path):
         logger.info(f"Скачанный файл {temp_path} не имеет поддерживаемого расширения, игнорируем")
         await message.answer("ℹ️ Файл успешно скачан, но его формат не поддерживается для распознавания речи. Поддерживаются: MP3, WAV, OGG, MP4, WEBM, AVI, MOV, MKV и др.")
@@ -129,16 +119,19 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
         created_tasks = []
 
         for assignee_username in assignee_usernames:
-            responsible_id = author_id
+            # ИЗМЕНЕНИЕ: ответственный по умолчанию None
+            responsible_id = None
             if assignee_username:
                 found_id = await ensure_user_exists(assignee_username, bot, message.chat.id)
                 if found_id:
                     responsible_id = found_id
 
+            assignee_ids = [responsible_id] if responsible_id else []
             card_id = await create_yougile_task(
                 title=parse_result["task"],
                 description=transcribed_text,
                 deadline_str=parse_result["deadline"],
+                assignee_user_ids=assignee_ids
             )
             if not card_id:
                 await status_msg.edit_text("❌ Не удалось создать задачу в YouGile.")
@@ -158,7 +151,22 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
             )
             add_task_history(task_uuid, 'pending', comment='Задача создана из ссылки на Яндекс.Диск')
 
-            if responsible_id != author_id:
+            # Уведомления
+            if responsible_id is None:
+                keyboard = InlineKeyboardBuilder()
+                keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
+                keyboard.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
+                keyboard.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
+                keyboard.adjust(1)
+                await bot.send_message(
+                    author_id,
+                    f"📌 Вы создали задачу (без исполнителя) из файла по ссылке:\n\n"
+                    f"📋 {parse_result['task']}\n"
+                    f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n\n"
+                    f"Вы можете взять задачу в работу или назначить исполнителя в YouGile.",
+                    reply_markup=keyboard.as_markup()
+                )
+            elif responsible_id != author_id:
                 keyboard_worker = InlineKeyboardBuilder()
                 keyboard_worker.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
                 keyboard_worker.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
@@ -205,30 +213,21 @@ async def handle_yadisk_link(message: Message, bot: Bot) -> None:
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-
-# ---------- Обработчик медиафайлов из Telegram ----------
 @router.message(F.voice | F.audio | F.video | F.video_note | F.document)
 async def handle_media_message(message: Message, bot: Bot) -> None:
     add_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
 
-    # Проверяем, является ли документ поддерживаемым (если это документ)
     if message.document:
         file_name = message.document.file_name or ""
         ext = file_name.split('.')[-1].lower() if '.' in file_name else ''
         if ext not in SUPPORTED_EXTENSIONS:
-            # Тихо игнорируем неподдерживаемые документы (например, .pdf, .txt, .jpg)
             logger.info(f"Игнорируем документ с неподдерживаемым расширением: {file_name}")
             return
-    # Для голосовых, аудио, видео, видео-заметок — они всегда поддерживаются
-    # (Telegram сам ограничивает их форматы, но дополнительная проверка не повредит)
     elif message.voice or message.audio or message.video or message.video_note:
-        # Все голосовые и аудио/видео в Telegram считаем поддерживаемыми
         pass
     else:
-        # Неизвестный тип — игнорируем
         return
 
-    # Проверка размера файла (только для Telegram-файлов)
     file_size = 0
     if message.document:
         file_size = message.document.file_size
@@ -273,16 +272,18 @@ async def handle_media_message(message: Message, bot: Bot) -> None:
         created_tasks = []
 
         for assignee_username in assignee_usernames:
-            responsible_id = author_id
+            responsible_id = None
             if assignee_username:
                 found_id = await ensure_user_exists(assignee_username, bot, message.chat.id)
                 if found_id:
                     responsible_id = found_id
 
+            assignee_ids = [responsible_id] if responsible_id else []
             card_id = await create_yougile_task(
                 title=parse_result["task"],
                 description=transcribed_text,
                 deadline_str=parse_result["deadline"],
+                assignee_user_ids=assignee_ids
             )
             if not card_id:
                 await status_msg.edit_text("❌ Не удалось создать задачу в YouGile.")
@@ -302,7 +303,21 @@ async def handle_media_message(message: Message, bot: Bot) -> None:
             )
             add_task_history(task_uuid, 'pending', comment='Задача создана из медиафайла')
 
-            if responsible_id != author_id:
+            if responsible_id is None:
+                keyboard = InlineKeyboardBuilder()
+                keyboard.button(text="❌ Удалить задачу", callback_data=f"cancel_task_{task_uuid}")
+                keyboard.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
+                keyboard.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
+                keyboard.adjust(1)
+                await bot.send_message(
+                    author_id,
+                    f"📌 Вы создали задачу (без исполнителя) из файла:\n\n"
+                    f"📋 {parse_result['task']}\n"
+                    f"⏰ Дедлайн: {parse_result['deadline'] or 'не указан'}\n\n"
+                    f"Вы можете взять задачу в работу или назначить исполнителя в YouGile.",
+                    reply_markup=keyboard.as_markup()
+                )
+            elif responsible_id != author_id:
                 keyboard_worker = InlineKeyboardBuilder()
                 keyboard_worker.button(text="▶️ Взять в работу", callback_data=f"move_to_do_{task_uuid}")
                 keyboard_worker.button(text="✅ Завершить", callback_data=f"complete_task_{task_uuid}")
