@@ -25,7 +25,8 @@ def init_db() -> None:
             yougile_card_id TEXT,
             chat_id INTEGER,
             created_at TEXT,
-            completed_at TEXT
+            completed_at TEXT,
+            last_reminded_at TEXT
         );
         CREATE TABLE IF NOT EXISTS users (
             telegram_id INTEGER PRIMARY KEY,
@@ -67,6 +68,10 @@ def init_db() -> None:
             pass
         try:
             conn.execute("ALTER TABLE user_stats ADD COLUMN tasks_created INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE tasks ADD COLUMN last_reminded_at TEXT")
         except sqlite3.OperationalError:
             pass
         conn.execute("CREATE INDEX IF NOT EXISTS idx_task_history_task_id ON task_history(task_id)")
@@ -171,7 +176,7 @@ def get_task_by_id(task_id: str) -> Optional[Dict[str, Any]]:
 def get_all_active_tasks() -> List[Dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(
-            """SELECT id, title, deadline_timestamp, responsible_telegram_id, chat_id
+            """SELECT id, title, deadline_timestamp, responsible_telegram_id, chat_id, last_reminded_at
                FROM tasks WHERE status = 'pending' AND deadline_timestamp IS NOT NULL"""
         ).fetchall()
         return [dict(row) for row in rows]
@@ -179,8 +184,17 @@ def get_all_active_tasks() -> List[Dict[str, Any]]:
 def get_tasks_with_upcoming_deadline(hours_before: int = 2) -> List[Dict[str, Any]]:
     now_ms = int(datetime.now().timestamp() * 1000)
     threshold_ms = now_ms + hours_before * 3_600_000
+    # Игнорируем задачи, о которых напоминали в последние 6 часов
+    six_hours_ago = (datetime.now() - timedelta(hours=6)).isoformat()
     return [t for t in get_all_active_tasks()
-            if t["deadline_timestamp"] and now_ms < t["deadline_timestamp"] <= threshold_ms]
+            if t["deadline_timestamp"] and now_ms < t["deadline_timestamp"] <= threshold_ms
+            and (t.get("last_reminded_at") is None or t["last_reminded_at"] < six_hours_ago)]
+
+def mark_task_reminded(task_id: str) -> None:
+    """Отмечает, что напоминание по задаче было отправлено."""
+    with _connect() as conn:
+        conn.execute("UPDATE tasks SET last_reminded_at = ? WHERE id = ?",
+                     (datetime.now().isoformat(), task_id))
 
 def complete_task(task_id: str) -> None:
     task = get_task_by_id(task_id)
@@ -314,7 +328,6 @@ def get_on_time_completion_rate(telegram_id: int) -> float:
     return (on_time / len(rows)) * 100
 
 def get_average_time_in_progress(telegram_id: int) -> Optional[float]:
-    """Среднее время в статусе 'in_progress' (часы)."""
     with _connect() as conn:
         task_rows = conn.execute(
             "SELECT id FROM tasks WHERE responsible_telegram_id = ? AND status = 'completed'",
