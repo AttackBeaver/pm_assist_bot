@@ -10,7 +10,7 @@ async def create_yougile_task(
     title: str,
     description: str,
     deadline_str: Optional[str] = None,
-    assignee_user_ids: Optional[List[int]] = None,   # добавлен параметр
+    assignee_user_ids: Optional[List[int]] = None,  # не используется
 ) -> Optional[str]:
     if not YOUGILE_TOKEN or not YOUGILE_BOARD_ID:
         logger.error("YouGile не настроен")
@@ -31,6 +31,6 @@ async def create_yougile_task(
             logger.warning("Колонка 'Сделать' не найдена, берём первую")
             column_id = columns[0]["id"]
     deadline_ts = deadline_to_timestamp(deadline_str) if deadline_str else None
-    # Передаём assignee_user_ids в YouGile (может быть None или список)
-    result = client.create_task(title, column_id, description, assigned_user_ids=assignee_user_ids, deadline_timestamp=deadline_ts)
+    # Убираем assignee_user_ids – YouGile не принимает числа
+    result = client.create_task(title, column_id, description, deadline_timestamp=deadline_ts)
     return result.get("id") if result else None
